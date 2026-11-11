@@ -6,9 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- A new visualizer, Cover Beat, after MilkDrop on the visualizer button: the now-playing cover swells on each kick drum and settles back between hits. It follows the kick only, not snares or hi-hats. In Theater Mode the cover grows past its edges; in the Queue and Radios it zooms within its frame. Settings → Interface → Artwork Column → Cover Beat Strength picks Subtle or Punchy.
+- A new visualizer, Cover Beat, follows MilkDrop on the visualizer button: the now-playing cover swells on each kick drum and settles back.
+- Cover Beat follows the kick drum only, not snares or hi-hats.
+- In Theater Mode the Cover Beat cover grows past its edges; in the Queue and Radios it zooms within its frame.
+- Settings → Interface → Artwork Column → Cover Beat Strength picks Subtle or Punchy.
 
 ### Changed
+
+- The macOS app icon now sits on a dark graphite plate, with neutral greys in place of the teal tint.
 
 ### Fixed
 

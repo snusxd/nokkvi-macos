@@ -71,10 +71,13 @@ build_macos_icon() {
   mark="assets/nokkvi_logo_readme.svg"
   out_dir="assets/macos"
   viewbox=$(sed -E 's/^<svg[^>]* viewBox="([^"]*)".*/\1/' "$mark")
-  inner=$(sed -E 's/^<svg[^>]*>//; s/<\/svg>[[:space:]]*$//' "$mark")
+  # The mark's teal-tinted greys are swapped for neutral ones here (macOS icon
+  # only), so the icon reads as plain graphite with no green cast.
+  inner=$(sed -E 's/^<svg[^>]*>//; s/<\/svg>[[:space:]]*$//' "$mark" \
+    | sed 's/#6d9a94/#8e9096/g; s/#e7eceb/#ececee/g; s/#111817/#0c0c0d/g')
   mkdir -p "$out_dir"
   cat > "$out_dir/nokkvi_icon.svg" <<EOF
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c4a48"/><stop offset="1" stop-color="#13201f"/></linearGradient><filter id="sh" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.3"/></filter></defs><rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#sh)"/><svg x="182" y="182" width="660" height="660" viewBox="$viewbox">$inner</svg></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#26262a"/><stop offset="1" stop-color="#0e0e10"/></linearGradient><filter id="sh" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.3"/></filter></defs><rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#sh)"/><rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#fff" stroke-opacity="0.08" stroke-width="4"/><svg x="182" y="182" width="660" height="660" viewBox="$viewbox">$inner</svg></svg>
 EOF
   set_dir=$(mktemp -d)/nokkvi.iconset
   mkdir -p "$set_dir"
