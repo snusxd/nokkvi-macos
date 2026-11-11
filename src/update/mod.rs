@@ -217,6 +217,9 @@ impl Nokkvi {
                     Task::none()
                 }
             }
+            Message::PlayerOverrideFetched(player_override) => {
+                self.handle_player_override_fetched(player_override)
+            }
             Message::ServerVersionFetched(ver) => {
                 match &ver {
                     Some(version) => {

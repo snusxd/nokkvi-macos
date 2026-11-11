@@ -1,9 +1,12 @@
 //! Playback tab setting entries.
 //!
-//! Contains six sections: Transitions (crossfade), Fading (smooth track
+//! Contains eight sections: Transitions (crossfade), Fading (smooth track
 //! starts + pause/resume/stop transport fades + the M8 content-aware overlap
 //! knobs — skip-silence, gap/overlap trim, bar-snap), Volume Normalization
-//! (mode dropdown + AGC target knob + ReplayGain knobs), Scrobbling, Rating
+//! (mode dropdown + AGC target knob + ReplayGain knobs), Streaming Quality
+//! (stream format + max bitrate, then a read-only row for what nokkvi's
+//! player row on the server forces, only while it forces something),
+//! Scrobbling, Radio Scrobbling, Rating
 //! Reminder (enable + conditional timing/percentage), and Playlists. Flat
 //! rows come from `define_settings!` via `build_playback_tab_settings_items`.
 //! The conditional AGC target-level knob, the four ReplayGain knobs (only
@@ -46,6 +49,7 @@ pub(crate) fn build_playback_items(data: &PlaybackSettingsData) -> Vec<SettingsE
     const TRANSITIONS: &str = "assets/icons/audio-waveform.svg";
     const FADING: &str = "assets/icons/blend.svg";
     const NORMALIZATION: &str = "assets/icons/sliders-vertical.svg";
+    const STREAMING: &str = "assets/icons/globe.svg";
     const SCR: &str = "assets/icons/radio-tower.svg";
     const CHECK: &str = "assets/icons/check.svg";
     const LOGOUT: &str = "assets/icons/log-out.svg";
@@ -202,6 +206,35 @@ pub(crate) fn build_playback_items(data: &PlaybackSettingsData) -> Vec<SettingsE
             .with_subtitle("Clamp gain so track_peak × gain ≤ 1.0"),
             data.replay_gain_prevent_clipping,
             true,
+        ));
+    }
+
+    items.extend([
+        // --- Streaming Quality ---
+        // Max Bitrate shows whatever the format: its subtitle says it is
+        // used only when the format isn't Original.
+        SettingsEntry::Header {
+            label: "Streaming Quality",
+            icon: STREAMING,
+        },
+        macro_rows.take("general.stream_format"),
+        macro_rows.take("general.stream_max_bitrate"),
+    ]);
+
+    // What nokkvi's own player row on the server forces (a transcoding, a
+    // max bit rate) beats the two rows above for every stream: say so,
+    // read-only, only while it forces something. nokkvi never writes the
+    // row; the subtitle says where to change it.
+    if let Some(found) = &data.server_player_override {
+        items.push(SettingItem::text(
+            SettingMeta::new(
+                "general.server_player_override",
+                "Set by Your Server",
+                "Streaming Quality",
+            )
+            .with_subtitle(found.description()),
+            &found.summary(),
+            "",
         ));
     }
 

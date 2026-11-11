@@ -366,6 +366,7 @@ fn live_transcode_update() -> PlaybackStateUpdate {
     PlaybackStateUpdate {
         seekable: false,
         live_transcode: true,
+        stream_origin: crate::state::StreamOrigin::Transcode,
         ..make_playback_update()
     }
 }
@@ -383,6 +384,34 @@ fn a_live_transcode_tick_publishes_an_unseekable_song() {
             .any(|c| matches!(c, MprisCommand::SetCanSeek(false))),
         "{commands:?}"
     );
+}
+
+/// A transcode the engine can reopen at an offset (nokkvi asked for it, and
+/// the server honours `timeOffset`) is published seekable, and a
+/// `SetPosition` on it seeks.
+#[test]
+fn a_transcode_the_engine_reopens_publishes_a_seekable_song() {
+    let (mut app, rx) = connected_app();
+    let reopenable = PlaybackStateUpdate {
+        seekable: true,
+        ..live_transcode_update()
+    };
+    let _ = app.handle_playback_state_updated(reopenable);
+
+    assert!(app.mpris_track.can_seek);
+    let commands = sent(&rx);
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, MprisCommand::SetCanSeek(true))),
+        "{commands:?}"
+    );
+    app.scrobble.last_position = UNTOUCHED;
+    let _ = app.handle_mpris(MprisEvent::SetPosition {
+        track_id: app.mpris_track.track_id.clone(),
+        position_us: 30_000_000,
+    });
+    assert_eq!(app.scrobble.last_position, 30.0, "the seek went out");
 }
 
 #[test]

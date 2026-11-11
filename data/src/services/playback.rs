@@ -7,32 +7,72 @@ use tracing::debug;
 use crate::{
     audio::engine::{CustomAudioEngine, SkipTransition},
     services::queue::{PreviousOutcome, QueueManager, TransitionReason},
-    types::{NextTrackResetEffect, player_settings::FadeOnSkip, song::Song},
+    types::{
+        NextTrackResetEffect,
+        player_settings::FadeOnSkip,
+        song::Song,
+        stream_quality::{StreamParams, StreamQuality, stream_params},
+    },
 };
 
 /// The server URL and Subsonic credential a queue song's stream URL is
-/// built from, resolved once per operation. Constructing one is the single
-/// "can we stream?" check: [`Self::new`] refuses when either half is
-/// missing (logged out, or a session that never finished resuming), so no
-/// path can build the relative `/rest/stream?…` an empty server URL gives,
-/// or a URL without credentials.
+/// built from, resolved once per operation, with the Streaming Quality
+/// setting as it was then (so building a URL stays a pure function of the
+/// song). Constructing one is the single "can we stream?" check:
+/// [`Self::new`] refuses when either half is missing (logged out, or a
+/// session that never finished resuming), so no path can build the relative
+/// `/rest/stream?…` an empty server URL gives, or a URL without credentials.
 #[derive(Clone)]
 pub struct StreamSession {
     server_url: String,
     credential: String,
+    quality: StreamQuality,
 }
 
 impl StreamSession {
+    /// A session that streams every song as its file (Original); see
+    /// [`Self::with_quality`].
     pub fn new(server_url: String, credential: String) -> Option<Self> {
         (!server_url.is_empty() && !credential.is_empty()).then_some(Self {
             server_url,
             credential,
+            quality: StreamQuality::default(),
         })
     }
 
-    /// The stream URL for `song_id`.
-    pub fn stream_url(&self, song_id: &str) -> String {
-        crate::utils::artwork_url::build_stream_url(song_id, &self.server_url, &self.credential)
+    /// This session, building its URLs under `quality`.
+    #[must_use]
+    pub fn with_quality(mut self, quality: StreamQuality) -> Self {
+        self.quality = quality;
+        self
+    }
+
+    /// The transcode `song` is asked for under this session's quality, or
+    /// `None` when it streams as its file.
+    pub fn transcode_for(&self, song: &Song) -> Option<StreamParams> {
+        stream_params(song, self.quality)
+    }
+
+    /// The stream URL for `song`, asking for the transcode
+    /// [`Self::transcode_for`] picks.
+    pub fn stream_url(&self, song: &Song) -> String {
+        self.build(&song.id, self.transcode_for(song))
+    }
+
+    /// The stream URL for the queue row `song_id`, whose song is `song` from
+    /// the pool. A pool miss (`None`, defensive) leaves nothing to judge the
+    /// setting by, so the file is asked for as it is.
+    pub fn stream_url_for(&self, song_id: &str, song: Option<&Song>) -> String {
+        self.build(song_id, song.and_then(|song| self.transcode_for(song)))
+    }
+
+    fn build(&self, song_id: &str, transcode: Option<StreamParams>) -> String {
+        crate::utils::artwork_url::build_stream_url(
+            song_id,
+            &self.server_url,
+            &self.credential,
+            transcode,
+        )
     }
 
     /// The song id of a URL [`Self::stream_url`] built, or `None` for any
@@ -124,11 +164,21 @@ impl<'a> StagedSong<'a> {
     /// any older one, and before `play()`, whose fresh-start branch
     /// consumes it.
     pub(crate) async fn load(&self, engine: &mut CustomAudioEngine) -> Result<()> {
-        let (replay_gain, expected_duration_ms) = self.song.map_or((None, None), |song| {
-            (song.replay_gain.clone(), song.expected_duration_ms())
-        });
+        let (replay_gain, expected_duration_ms, expected_file_size) =
+            self.song.map_or((None, None, None), |song| {
+                (
+                    song.replay_gain.clone(),
+                    song.expected_duration_ms(),
+                    song.expected_file_size(),
+                )
+            });
         engine
-            .load_track_with_rg(self.url, replay_gain, expected_duration_ms)
+            .load_track_with_rg(
+                self.url,
+                replay_gain,
+                expected_duration_ms,
+                expected_file_size,
+            )
             .await;
         if let Some(start_ms) = self.start_ms {
             engine.set_pending_start_ms(start_ms);
@@ -588,7 +638,7 @@ impl QueueNavigator {
                 let reason = TransitionReason::Repeat;
                 return if needs_load {
                     TrackTransitionPlan::LoadFresh {
-                        stream_url: session.stream_url(&song.id),
+                        stream_url: session.stream_url(&song),
                         song,
                         reason,
                     }
@@ -639,13 +689,18 @@ impl QueueNavigator {
             debug!(" No queued song to transition to");
             return TrackTransitionPlan::Stop;
         };
+        let queue_reason = peeked.reason();
         let transition = peeked.transition();
 
         let song = transition.song.clone();
         // A crossfade is the most specific transition fact for the log, so it
         // wins the label even under shuffle (the engine blended the two tracks).
+        // A fresh load is no gapless join: the queue's own reason (next,
+        // shuffle, repeat queue) labels it.
         let reason = if was_crossfade {
             TransitionReason::Crossfade
+        } else if needs_load {
+            queue_reason
         } else if queue_manager.get_queue().shuffle {
             TransitionReason::Shuffle
         } else {
@@ -678,7 +733,7 @@ impl QueueNavigator {
 
         if needs_load {
             TrackTransitionPlan::LoadFresh {
-                stream_url: session.stream_url(&song.id),
+                stream_url: session.stream_url(&song),
                 song,
                 reason,
             }
@@ -742,7 +797,7 @@ impl QueueNavigator {
             song.title, song.artist, song.id
         );
 
-        let stream_url = session.stream_url(&song.id);
+        let stream_url = session.stream_url(song);
 
         *self.current_song_id.lock().await = Some(song.id.clone());
 
@@ -783,7 +838,7 @@ impl QueueNavigator {
                 Ok(Some(SkipFadePlan {
                     song: song.clone(),
                     reason,
-                    stream_url: session.stream_url(&song.id),
+                    stream_url: session.stream_url(song),
                 }))
             }
             SkipTransition::BoundaryFade => {
@@ -1035,8 +1090,133 @@ mod tests {
         let session = session("http://server");
         assert!(
             session
-                .stream_url("abc")
+                .stream_url(&make_song("abc"))
                 .starts_with("http://server/rest/stream?id=abc&u=test&p=test")
+        );
+    }
+
+    fn flac_song(id: &str) -> Song {
+        Song {
+            suffix: Some("flac".to_string()),
+            bitrate: Some(900),
+            channels: Some(2),
+            ..make_song(id)
+        }
+    }
+
+    /// A session built under Opus / 128 asks for the transcode the rule picks
+    /// for each song, keeps `id` first, and asks a pool miss for the file.
+    #[test]
+    fn a_session_asks_for_the_transcode_its_quality_picks() {
+        use crate::types::{
+            player_settings::{StreamFormat, StreamMaxBitrate},
+            stream_quality::StreamQuality,
+        };
+        let session = session("http://server").with_quality(StreamQuality {
+            format: StreamFormat::Opus,
+            max_bitrate: StreamMaxBitrate::Kbps128,
+        });
+
+        let flac = session.stream_url(&flac_song("f1"));
+        assert!(
+            flac.starts_with("http://server/rest/stream?id=f1&format=opus&maxBitRate=128&"),
+            "{flac}"
+        );
+        assert_eq!(StreamSession::song_id_of(&flac), Some("f1"));
+
+        let mp3 = Song {
+            suffix: Some("mp3".to_string()),
+            bitrate: Some(128),
+            ..make_song("m1")
+        };
+        assert!(!session.stream_url(&mp3).contains("format="));
+
+        assert!(
+            session
+                .stream_url_for("f1", Some(&flac_song("f1")))
+                .contains("&format=opus&maxBitRate=128&")
+        );
+        assert!(!session.stream_url_for("f1", None).contains("format="));
+    }
+
+    /// Every URL a session builds, for every setting and kind of song, asks
+    /// either for the file (no `format`, no `maxBitRate`) or for opus / mp3
+    /// together with the setting's cap; never `format=raw`, never a cap
+    /// alone, never `estimateContentLength`.
+    #[test]
+    fn every_built_url_asks_for_opus_or_mp3_with_its_cap_or_for_the_file() {
+        use crate::types::{
+            player_settings::{StreamFormat, StreamMaxBitrate},
+            stream_quality::StreamQuality,
+        };
+        let songs = [
+            flac_song("f1"),
+            Song {
+                suffix: Some("mp3".to_string()),
+                bitrate: Some(320),
+                ..make_song("m1")
+            },
+            Song {
+                suffix: Some("ape".to_string()),
+                channels: Some(6),
+                ..make_song("a1")
+            },
+            make_song("u1"),
+        ];
+        let mut transcodes = 0;
+        for format in [
+            StreamFormat::Original,
+            StreamFormat::Opus,
+            StreamFormat::Mp3,
+        ] {
+            for cap in StreamMaxBitrate::ALL {
+                let session = session("http://server").with_quality(StreamQuality {
+                    format,
+                    max_bitrate: cap,
+                });
+                for song in &songs {
+                    let url = session.stream_url(song);
+                    let pairs: Vec<(String, String)> = url::Url::parse(&url)
+                        .expect("a URL")
+                        .query_pairs()
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
+                    let value = |key: &str| {
+                        pairs
+                            .iter()
+                            .filter(|(k, _)| k == key)
+                            .map(|(_, v)| v.as_str())
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(pairs[0].0, "id", "{url}");
+                    assert!(!url.contains("estimateContentLength"), "{url}");
+                    match value("format").as_slice() {
+                        [] => assert!(value("maxBitRate").is_empty(), "a cap alone: {url}"),
+                        [wire] => {
+                            assert!(matches!(*wire, "opus" | "mp3"), "{url}");
+                            assert_ne!(format, StreamFormat::Original, "{url}");
+                            let kbps = cap.kbps().to_string();
+                            assert_eq!(value("maxBitRate"), [kbps.as_str()], "{url}");
+                            transcodes += 1;
+                        }
+                        many => panic!("{} formats: {url}", many.len()),
+                    }
+                }
+            }
+        }
+        assert!(
+            transcodes > 0,
+            "the FLAC and the APE transcode under Opus and MP3"
+        );
+    }
+
+    /// A session with no quality given streams every song as its file.
+    #[test]
+    fn a_session_without_a_quality_streams_every_song_as_its_file() {
+        assert!(
+            !session("http://server")
+                .stream_url(&flac_song("f1"))
+                .contains("format=")
         );
     }
 
@@ -1046,7 +1226,7 @@ mod tests {
     fn song_id_of_reads_back_the_built_stream_url() {
         let session = session("http://server");
         assert_eq!(
-            StreamSession::song_id_of(&session.stream_url("abc")),
+            StreamSession::song_id_of(&session.stream_url(&make_song("abc"))),
             Some("abc")
         );
         assert_eq!(StreamSession::song_id_of(""), None);
@@ -1155,7 +1335,9 @@ mod tests {
                 reason,
             } => {
                 assert_eq!(song.id, "b");
-                assert_eq!(reason, TransitionReason::Gapless);
+                // A fresh load is no gapless join: the queue's own reason
+                // labels it (the log once called every hard load "gapless").
+                assert_eq!(reason, TransitionReason::Next);
                 assert!(stream_url.starts_with("http://server/rest/stream?id=b"));
             }
             other => panic!("expected LoadFresh, got {other:?}"),
@@ -1219,9 +1401,10 @@ mod tests {
         match plan {
             TrackTransitionPlan::LoadFresh { song, reason, .. } => {
                 assert_eq!(song.id, "b", "must advance, not replay 'a'");
+                // A fresh load carries the queue's own reason (not Repeat).
                 assert_eq!(
                     reason,
-                    TransitionReason::Gapless,
+                    TransitionReason::Next,
                     "fell through to the advance path"
                 );
             }

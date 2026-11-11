@@ -694,6 +694,7 @@ mod tests {
                 "Transitions",
                 "Fading",
                 "Volume Normalization",
+                "Streaming Quality",
                 "Scrobbling",
                 "Radio Scrobbling",
                 "Rating Reminder",
@@ -730,6 +731,8 @@ mod tests {
                 "general.crossfade_offset",
                 "general.crossfade_bar_snap",
                 "general.volume_normalization",
+                "general.stream_format",
+                "general.stream_max_bitrate",
                 "general.scrobbling_enabled",
                 "general.scrobble_threshold",
                 "general.radio_scrobbling_enabled",
@@ -902,6 +905,58 @@ mod tests {
                 "general.replay_gain_prevent_clipping",
             ],
         );
+    }
+
+    /// The Streaming Quality section holds its two rows in every
+    /// normalization mode: the conditional AGC / ReplayGain knobs land in
+    /// Volume Normalization above it, never inside it, and Max Bitrate shows
+    /// whatever the format (its subtitle says when it applies).
+    #[test]
+    fn playback_items_structure_streaming_quality_holds_format_then_bitrate() {
+        use super::super::items_playback::{PlaybackSettingsData, build_playback_items};
+        for mode in ["Off", "AGC", "ReplayGain (Track)", "ReplayGain (Album)"] {
+            for format in ["Original", "Opus", "MP3"] {
+                let data = PlaybackSettingsData {
+                    volume_normalization: mode.into(),
+                    stream_format: format.into(),
+                    ..Default::default()
+                };
+                assert_section_keys(
+                    &build_playback_items(&data),
+                    "Streaming Quality",
+                    &["general.stream_format", "general.stream_max_bitrate"],
+                );
+            }
+        }
+    }
+
+    /// What nokkvi's player row on the server forces closes the Streaming
+    /// Quality section, read-only, only while it forces something: a forced
+    /// transcoding, or a max bit rate alone.
+    #[test]
+    fn playback_items_structure_streaming_quality_ends_with_the_servers_override() {
+        use nokkvi_data::types::player_override::{ForcedTranscoding, PlayerOverride};
+
+        use super::super::items_playback::{PlaybackSettingsData, build_playback_items};
+        let forced = Some(ForcedTranscoding {
+            format: "mp3".to_owned(),
+            default_bitrate_kbps: Some(192),
+        });
+        for found in [PlayerOverride::of(forced, 0), PlayerOverride::of(None, 96)] {
+            let data = PlaybackSettingsData {
+                server_player_override: found,
+                ..Default::default()
+            };
+            assert_section_keys(
+                &build_playback_items(&data),
+                "Streaming Quality",
+                &[
+                    "general.stream_format",
+                    "general.stream_max_bitrate",
+                    "general.server_player_override",
+                ],
+            );
+        }
     }
 
     /// Find the first `SettingItem` matching `key` and assert it carries the

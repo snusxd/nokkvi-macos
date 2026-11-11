@@ -96,8 +96,15 @@
 //! | `ping`        | respond   | `"pong"` (bare string).                        |
 //! | `status`      | act       | `{state,title,artist,album,position,duration,` |
 //! |               |           | `volume,random,repeat,consume,theater,`        |
-//! |               |           | `visualizer,preset}` — pure                     |
-//! |               |           | read.                                          |
+//! |               |           | `visualizer,preset,codec,bitrate,sample_rate,` |
+//! |               |           | `delivery,origin,seekable,seek_kind}` — pure   |
+//! |               |           | read. The last seven describe the stream that  |
+//! |               |           | plays: decoded codec (null with nothing open), |
+//! |               |           | the decoder's live kbps (0 until a packet; a   |
+//! |               |           | reopen starts it over), `delivery` `sized` /   |
+//! |               |           | `unsized` / `live` (null), `origin` `file` /   |
+//! |               |           | `transcode` / `unknown`, `seek_kind` `range` / |
+//! |               |           | `reopen` / `none`.                             |
 //! | `next`        | dispatch  | `{"ok":true}`; `NextTrack` (new track async).  |
 //! | `previous`    | dispatch  | `{"ok":true}`; `PrevTrack` (new track async).  |
 //! | `play`        | act       | `{"state":…}`; calls `handle_play`.            |
@@ -108,7 +115,8 @@
 //! |               |           | relative; arg `position` (seconds). `"+N"`/    |
 //! |               |           | `"-N"` seeks relative to the current position, |
 //! |               |           | `"N"` is absolute. `unavailable` during radio  |
-//! |               |           | and on a song the server transcodes on the fly.|
+//! |               |           | and on a live transcode the engine can't       |
+//! |               |           | reopen at an offset.                           |
 //! | `volume`      | act_str   | `{"volume":N}`; arg `value`. `"+N"`/`"-N"`     |
 //! |               |           | (delta, clamped 0.0..=1.0) or `"N"` absolute  |
 //! |               |           | (0.0..=1.0, rejected if out of range). Routes |
@@ -470,9 +478,10 @@ define_commands! {
         let task = app.handle_stop();
         Ok((task, json!({ "state": app.playback.transport().ipc_token() })))
     }), help ("", "Stop playback");
-    // The seek handlers no-op on radio and on a song the server transcodes
-    // on the fly (no seekable position), so guard here
-    // and return an error rather than echoing a false success.
+    // The seek handlers no-op on radio and on a live transcode the engine
+    // can't reopen at an offset (no seekable position), so guard here and
+    // return an error rather than echoing a false success, in the toast's
+    // words.
     //
     // Absolute answers `{"position": N}`; relative answers `{"offset": ±N}`,
     // the honest "what was dispatched" shape — the landing point is not known
@@ -482,10 +491,7 @@ define_commands! {
             return Err(("unavailable", "seek is not available during radio playback".to_string()));
         }
         if !app.seek_available() {
-            return Err((
-                "unavailable",
-                "seek is not available: the server is transcoding this song".to_string(),
-            ));
+            return Err(("unavailable", app.playback.stream.seek_refusal().to_string()));
         }
         let request = parse_seek_arg(raw).map_err(|message| ("invalid_args", message))?;
         match request {
@@ -831,8 +837,18 @@ fn round_f32(v: f32) -> f64 {
 /// resident app state. Unlike the toggle verbs' optimistic echo, this reports
 /// ground-truth current state and never predicts.
 fn status_json(app: &Nokkvi) -> serde_json::Value {
+    // After Stop nothing plays: the tick still carries the stopped track's
+    // stream, which is no stream to describe.
+    let transport = app.playback.transport();
+    let stopped = crate::state::StreamStatus::default();
+    let (stream, sample_rate) = match transport {
+        crate::state::TransportState::Playing | crate::state::TransportState::Paused => {
+            (&app.playback.stream, app.playback.sample_rate)
+        }
+        crate::state::TransportState::Stopped => (&stopped, 0),
+    };
     json!({
-        "state": app.playback.transport().ipc_token(),
+        "state": transport.ipc_token(),
         "title": app.playback.title,
         "artist": app.playback.artist,
         "album": app.playback.album,
@@ -845,7 +861,46 @@ fn status_json(app: &Nokkvi) -> serde_json::Value {
         "theater": app.theater.active,
         "visualizer": app.settings.visualization_mode.to_string(),
         "preset": app.milkdrop.on_screen,
+        // The stream that plays (the queue's track, or a station).
+        "codec": stream.codec,
+        "bitrate": stream.live_bitrate,
+        "sample_rate": sample_rate,
+        "delivery": stream.delivery.map(delivery_token),
+        "origin": origin_token(stream.origin),
+        "seekable": app.seek_available()
+            && stream.seek_kind != nokkvi_data::audio::engine::SeekKind::None,
+        "seek_kind": seek_kind_token(stream.seek_kind),
     })
+}
+
+/// `status`'s `delivery`: how the bytes arrive.
+fn delivery_token(delivery: nokkvi_data::audio::StreamDelivery) -> &'static str {
+    match delivery {
+        nokkvi_data::audio::StreamDelivery::Sized => "sized",
+        nokkvi_data::audio::StreamDelivery::Unsized => "unsized",
+        nokkvi_data::audio::StreamDelivery::Live => "live",
+    }
+}
+
+/// `status`'s `origin`: the song's own file, something the server made from
+/// it, or not known (a station, nothing loaded).
+fn origin_token(origin: crate::state::StreamOrigin) -> &'static str {
+    match origin {
+        crate::state::StreamOrigin::OriginalFile => "file",
+        crate::state::StreamOrigin::Transcode => "transcode",
+        // A pending verdict never lands in the status (the tick keeps the
+        // last one), and an unknown one is just that.
+        crate::state::StreamOrigin::Unknown | crate::state::StreamOrigin::Pending => "unknown",
+    }
+}
+
+/// `status`'s `seek_kind`: how a seek moves.
+fn seek_kind_token(kind: nokkvi_data::audio::engine::SeekKind) -> &'static str {
+    match kind {
+        nokkvi_data::audio::engine::SeekKind::Range => "range",
+        nokkvi_data::audio::engine::SeekKind::Reopen => "reopen",
+        nokkvi_data::audio::engine::SeekKind::None => "none",
+    }
 }
 
 /// Parse a seek-arg string into a [`SeekRequest`](crate::state::SeekRequest).

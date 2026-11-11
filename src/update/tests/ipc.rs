@@ -450,6 +450,13 @@ fn status_returns_a_full_state_snapshot() {
         "theater",
         "visualizer",
         "preset",
+        "codec",
+        "bitrate",
+        "sample_rate",
+        "delivery",
+        "origin",
+        "seekable",
+        "seek_kind",
     ] {
         assert!(
             data.get(key).is_some(),
@@ -470,9 +477,7 @@ fn status_returns_a_full_state_snapshot() {
 #[test]
 fn status_reports_stopped_after_a_forced_logout() {
     // `reset_session_state` clears the static SSE slot.
-    let _sse = super::SSE_SLOT_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _sse = super::sse_slot_guard();
     let mut app = test_app();
     app.playback.playing = true;
     app.playback.paused = false;
@@ -1654,6 +1659,50 @@ fn seek_on_a_live_transcode_returns_unavailable() {
     }
 }
 
+/// The verb's refusal says why in the toast's words: a smaller copy nokkvi
+/// asked for on a server that can't seek in one, or a format the server
+/// chose on its own.
+#[test]
+fn a_refused_seek_says_why_in_the_toasts_words() {
+    for (requested_transcode, why) in [
+        (true, "Can't seek in a smaller copy on this server"),
+        (
+            false,
+            "Can't seek: your server is choosing this song's format",
+        ),
+    ] {
+        let mut app = test_app();
+        app.playback.seekable = false;
+        app.playback.stream.requested_transcode = requested_transcode;
+
+        let resp = drive_on_with_args(&mut app, "seek", json!({ "position": "42" }));
+
+        let err = resp.error.expect("refused");
+        assert_eq!(err.code, "unavailable");
+        assert_eq!(err.message, why, "requested: {requested_transcode}");
+    }
+}
+
+#[test]
+fn seek_on_a_transcode_the_engine_reopens_is_dispatched() {
+    // With `transcodeOffset` the engine seeks a transcode nokkvi asked for
+    // by reopening it at an offset, and reports it seekable: the verb seeks.
+    let mut app = test_app();
+    app.playback.seekable = true;
+    app.playback.live_transcode = true;
+    for (raw, key) in [("42", "position"), ("+10", "offset")] {
+        let resp = drive_on_with_args(&mut app, "seek", json!({ "position": raw }));
+        assert!(resp.error.is_none(), "{raw}: {:?}", resp.error);
+        assert!(
+            resp.data
+                .as_ref()
+                .is_some_and(|data| data.get(key).is_some()),
+            "{raw}: {:?}",
+            resp.data
+        );
+    }
+}
+
 /// Under the Trawl modal a verb does what its key would there: it acts only
 /// where the key gate admits its twin (`ActiveModal::takes_action`), and each
 /// verb's twin is admitted exactly when the verb acts. Walks every action, so
@@ -1760,4 +1809,163 @@ fn selection_and_the_add_reply_name_the_highlighted_row() {
         .expect("the pin walks with the viewport");
     assert_eq!(highlighted, 8);
     check(&mut app, highlighted, "pin");
+}
+
+// ----------------------------------------------------------------------------
+// status — the stream that plays
+// ----------------------------------------------------------------------------
+
+/// The tick of a requested Opus transcode that seeks by reopening.
+fn reopening_opus_tick() -> crate::app_message::PlaybackStateUpdate {
+    use nokkvi_data::audio::{StreamDelivery, engine::SeekKind};
+    crate::app_message::PlaybackStateUpdate {
+        sample_rate: 48_000,
+        seekable: true,
+        live_transcode: true,
+        stream_origin: crate::state::StreamOrigin::Transcode,
+        stream_status: crate::state::StreamStatus {
+            codec: Some("opus".to_owned()),
+            live_bitrate: 131,
+            delivery: Some(StreamDelivery::Unsized),
+            seek_kind: SeekKind::Reopen,
+            requested_transcode: true,
+            ..crate::state::StreamStatus::default()
+        },
+        ..super::playback::make_playback_update()
+    }
+}
+
+/// `status` names the stream that plays, beside the track: the decoded
+/// codec, the decoder's live bitrate, the sample rate, how the bytes arrive,
+/// whether it is the song's own file, and whether and how it seeks. The
+/// live-test evidence reads these.
+#[test]
+fn status_reports_the_stream_that_plays() {
+    let mut app = test_app();
+    let _ = app.handle_playback_state_updated(reopening_opus_tick());
+
+    let data = drive_on(&mut app, "status")
+        .data
+        .expect("status must carry data");
+
+    assert_eq!(data.get("codec"), Some(&json!("opus")));
+    assert_eq!(data.get("bitrate"), Some(&json!(131)));
+    assert_eq!(data.get("sample_rate"), Some(&json!(48_000)));
+    assert_eq!(data.get("delivery"), Some(&json!("unsized")));
+    assert_eq!(data.get("origin"), Some(&json!("transcode")));
+    assert_eq!(data.get("seekable"), Some(&json!(true)));
+    assert_eq!(data.get("seek_kind"), Some(&json!("reopen")));
+}
+
+/// The song's own file, seeking within its bytes.
+#[test]
+fn status_reports_a_file_that_seeks_in_ranges() {
+    use nokkvi_data::audio::{StreamDelivery, engine::SeekKind};
+    let mut app = test_app();
+    let _ = app.handle_playback_state_updated(crate::app_message::PlaybackStateUpdate {
+        stream_status: crate::state::StreamStatus {
+            codec: Some("flac".to_owned()),
+            live_bitrate: 905,
+            delivery: Some(StreamDelivery::Sized),
+            seek_kind: SeekKind::Range,
+            ..crate::state::StreamStatus::default()
+        },
+        ..super::playback::make_playback_update()
+    });
+
+    let data = drive_on(&mut app, "status").data.expect("data");
+
+    assert_eq!(data.get("delivery"), Some(&json!("sized")));
+    assert_eq!(data.get("origin"), Some(&json!("file")));
+    assert_eq!(data.get("seek_kind"), Some(&json!("range")));
+    assert_eq!(data.get("seekable"), Some(&json!(true)));
+}
+
+/// A transcode the server forced on its own can't seek: `seekable` false,
+/// `seek_kind` "none".
+#[test]
+fn status_reports_a_transcode_that_cannot_seek() {
+    use nokkvi_data::audio::{StreamDelivery, engine::SeekKind};
+    let mut app = test_app();
+    let _ = app.handle_playback_state_updated(crate::app_message::PlaybackStateUpdate {
+        seekable: false,
+        live_transcode: true,
+        stream_origin: crate::state::StreamOrigin::Transcode,
+        stream_status: crate::state::StreamStatus {
+            codec: Some("mp3".to_owned()),
+            delivery: Some(StreamDelivery::Unsized),
+            seek_kind: SeekKind::None,
+            ..crate::state::StreamStatus::default()
+        },
+        ..super::playback::make_playback_update()
+    });
+
+    let data = drive_on(&mut app, "status").data.expect("data");
+
+    assert_eq!(data.get("seekable"), Some(&json!(false)));
+    assert_eq!(data.get("seek_kind"), Some(&json!("none")));
+}
+
+/// With nothing loaded there is no stream to describe.
+#[test]
+fn status_with_nothing_loaded_names_no_stream() {
+    let data = drive("status").data.expect("data");
+
+    assert_eq!(data.get("codec"), Some(&serde_json::Value::Null));
+    assert_eq!(data.get("bitrate"), Some(&json!(0)));
+    assert_eq!(data.get("delivery"), Some(&serde_json::Value::Null));
+    assert_eq!(data.get("origin"), Some(&json!("unknown")));
+    assert_eq!(data.get("seekable"), Some(&json!(false)));
+    assert_eq!(data.get("seek_kind"), Some(&json!("none")));
+}
+
+/// After Stop nothing plays, so there is no stream to describe: the
+/// stopped track's codec, delivery and seek kind are not reported beside a
+/// bitrate of 0. Paused, the stream is still there.
+#[test]
+fn status_after_stop_names_no_stream() {
+    let mut app = test_app();
+    let _ = app.handle_playback_state_updated(crate::app_message::PlaybackStateUpdate {
+        playing: false,
+        paused: false,
+        ..reopening_opus_tick()
+    });
+
+    let data = drive_on(&mut app, "status").data.expect("data");
+
+    assert_eq!(data.get("state"), Some(&json!("stopped")));
+    assert_eq!(data.get("codec"), Some(&serde_json::Value::Null));
+    assert_eq!(data.get("bitrate"), Some(&json!(0)));
+    assert_eq!(data.get("sample_rate"), Some(&json!(0)));
+    assert_eq!(data.get("delivery"), Some(&serde_json::Value::Null));
+    assert_eq!(data.get("origin"), Some(&json!("unknown")));
+    assert_eq!(data.get("seekable"), Some(&json!(false)));
+    assert_eq!(data.get("seek_kind"), Some(&json!("none")));
+
+    let _ = app.handle_playback_state_updated(crate::app_message::PlaybackStateUpdate {
+        playing: false,
+        paused: true,
+        ..reopening_opus_tick()
+    });
+    let data = drive_on(&mut app, "status").data.expect("data");
+    assert_eq!(data.get("state"), Some(&json!("paused")));
+    assert_eq!(data.get("codec"), Some(&json!("opus")));
+    assert_eq!(data.get("seek_kind"), Some(&json!("reopen")));
+}
+
+/// A tick on which the engine does not describe the song yet (a skip's
+/// decoder building) keeps the origin the last tick found, as the badge
+/// does.
+#[test]
+fn status_keeps_the_origin_through_a_pending_tick() {
+    let mut app = test_app();
+    let _ = app.handle_playback_state_updated(reopening_opus_tick());
+    let _ = app.handle_playback_state_updated(crate::app_message::PlaybackStateUpdate {
+        stream_origin: crate::state::StreamOrigin::Pending,
+        ..reopening_opus_tick()
+    });
+
+    let data = drive_on(&mut app, "status").data.expect("data");
+
+    assert_eq!(data.get("origin"), Some(&json!("transcode")));
 }

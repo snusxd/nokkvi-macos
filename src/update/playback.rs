@@ -1,13 +1,16 @@
 //! Playback control handlers
 
 use iced::Task;
-use nokkvi_data::types::queue::RepeatMode;
+use nokkvi_data::{
+    audio::StreamFacts, services::playback::StreamSession, types::queue::RepeatMode,
+};
 use tracing::{debug, trace, warn};
 
 use crate::{
     Nokkvi, View,
     app_message::{Message, PlaybackMessage, ScrobbleMessage, ToastMessage},
     services::mpris_art_writer::{self, MprisArtItem},
+    state::StreamOrigin,
     views,
 };
 
@@ -128,32 +131,79 @@ fn bit_perfect_status_for(
 /// reading the setting would let the badge claim BIT-PERFECT for a stream still
 /// on the DSP path. `current_stream_bit_perfect` already encodes the
 /// native-PipeWire-volume requirement (the cpal fallback can't be bit-perfect),
-/// so no separate native-volume check is needed. A lossy source is excluded
-/// outright (a radio stream, or a song the server transcodes on the fly): it
-/// can't be bit-perfect regardless of the device clock.
+/// so no separate native-volume check is needed. A source not proven to be the
+/// song's own file is excluded outright (a radio stream, a transcode, or a
+/// stream whose origin can't be told, see [`StreamOrigin`]): it can't claim
+/// bit-perfect regardless of the device clock.
 fn bit_perfect_badge_engaged(
     current_stream_bit_perfect: bool,
     playing: bool,
-    lossy_source: bool,
+    unproven_source: bool,
 ) -> bool {
-    current_stream_bit_perfect && playing && !lossy_source
+    current_stream_bit_perfect && playing && !unproven_source
 }
 
-/// The format label for a queue song: the file's extension, or for a live
-/// transcode the codec the server actually sends.
-pub(crate) fn song_format_label(
-    path: &str,
-    live_codec: Option<&str>,
-    live_transcode: bool,
-) -> String {
-    match live_codec {
-        Some(codec) if live_transcode => codec.to_string(),
-        _ => path
-            .rsplit('.')
-            .next()
-            .map(|ext| ext.to_lowercase())
-            .unwrap_or_default(),
+/// The format label for a queue song: its file's extension for the file
+/// itself, the codec the server actually sends for a transcode. When the
+/// origin can't be told, the extension stays only while the decoded codec is
+/// one a file of that extension holds ([`codec_fits_suffix`]); any other
+/// codec can only be a transcode's. With no codec known yet, the extension.
+pub(crate) fn song_format_label(path: &str, codec: Option<&str>, origin: StreamOrigin) -> String {
+    let suffix = path
+        .rsplit('.')
+        .next()
+        .map(|ext| ext.to_lowercase())
+        .unwrap_or_default();
+    match (origin, codec) {
+        (StreamOrigin::Transcode, Some(codec)) => codec.to_string(),
+        (StreamOrigin::Unknown, Some(codec)) if !codec_fits_suffix(&suffix, codec) => {
+            codec.to_string()
+        }
+        // The file itself, a codec its extension holds, no codec yet, or a
+        // stream that does not describe this song yet.
+        (
+            StreamOrigin::OriginalFile
+            | StreamOrigin::Transcode
+            | StreamOrigin::Unknown
+            | StreamOrigin::Pending,
+            _,
+        ) => suffix,
     }
+}
+
+/// Whether a file with extension `suffix` can hold audio Symphonia decodes
+/// as `codec` (its short codec name). The container families, after what
+/// Symphonia 0.6's readers map: WAV and AIFF carry PCM (A-law and µ-law
+/// included, all `pcm_*`) or ADPCM; MP4 carries AAC, ALAC, MP3, FLAC, Opus
+/// or PCM; Ogg carries Vorbis, Opus or FLAC; Matroska and WebM carry
+/// anything. Every other extension names its codec (`flac`, `mp3`, `opus`,
+/// `aac`, ...).
+fn codec_fits_suffix(suffix: &str, codec: &str) -> bool {
+    let pcm = codec.starts_with("pcm_");
+    match suffix {
+        "wav" | "wave" | "aif" | "aiff" | "aifc" => pcm || codec.starts_with("adpcm_"),
+        "m4a" | "m4b" | "mp4" => pcm || matches!(codec, "aac" | "alac" | "mp3" | "flac" | "opus"),
+        "ogg" | "oga" => matches!(codec, "vorbis" | "opus" | "flac"),
+        "mka" | "mkv" | "webm" => true,
+        _ => suffix == codec,
+    }
+}
+
+/// The format label and stream origin the tick reports for `song`, from
+/// the stream the engine reports for the queue's track and that track's
+/// source URL.
+pub(crate) fn queue_song_format(
+    song: &nokkvi_data::types::song::Song,
+    queue_source: Option<&str>,
+    stream: Option<&StreamFacts>,
+) -> (String, StreamOrigin) {
+    // A stream whose source names another song (the engine moved on before
+    // the queue did) describes nothing about this one yet.
+    let names_song = queue_source.and_then(StreamSession::song_id_of) == Some(song.id.as_str());
+    let stream = stream.filter(|_| names_song);
+    let origin = StreamOrigin::of(stream, song.size);
+    let codec = stream.and_then(|stream| stream.codec.as_deref());
+    (song_format_label(&song.path, codec, origin), origin)
 }
 
 /// Resolve the next radio-station index when cycling.
@@ -233,6 +283,89 @@ struct MprisUpdate<'a> {
     repeat: bool,
     repeat_queue: bool,
     random: bool,
+}
+
+/// Why a song failed to play, in plain words for a toast: a busy server
+/// and one that didn't answer read as such, anything else as its error.
+pub(crate) fn play_failure_text(error: &anyhow::Error) -> String {
+    use nokkvi_data::audio::{NoAnswer, ServerBusy, error_is};
+    if error_is::<ServerBusy>(error) {
+        "the server is busy. Try again in a few seconds.".to_owned()
+    } else if error_is::<NoAnswer>(error) {
+        "the server didn't answer.".to_owned()
+    } else {
+        format!("{error}")
+    }
+}
+
+/// The toast for a song that failed to play: Enter, Next and Previous say
+/// it the same way.
+pub(crate) fn play_failed_message(error: &anyhow::Error) -> Message {
+    Message::Toast(ToastMessage::Push(nokkvi_data::types::toast::Toast::new(
+        format!("Failed to play song: {}", play_failure_text(error)),
+        nokkvi_data::types::toast::ToastLevel::Error,
+    )))
+}
+
+/// What a Next answered becomes on the UI: a moved queue refreshes
+/// (reloaded under consume, which removed a row), the end of the queue says
+/// so (button and MPRIS alike), and a song that failed to load says why
+/// (the server's transcode limit, live): the queue moved onto it, so a Play
+/// tries it again.
+pub(crate) fn next_track_result_message(result: anyhow::Result<bool>, consume: bool) -> Message {
+    match result {
+        Err(e) => {
+            warn!(" Next failed to play its song: {e:#}");
+            play_failed_message(&e)
+        }
+        Ok(false) => Message::Toast(ToastMessage::Push(nokkvi_data::types::toast::Toast::new(
+            "No next track",
+            nokkvi_data::types::toast::ToastLevel::Info,
+        ))),
+        Ok(true) if consume => Message::LoadQueue,
+        Ok(true) => Message::Playback(PlaybackMessage::Tick),
+    }
+}
+
+/// What a Previous answered becomes on the UI. `BlockedConsumeShuffle`
+/// means the step-back was refused because it would land on a consumed
+/// track under shuffle (re-inserting would strand a surviving track):
+/// nothing changed, so it says why instead of reloading the queue.
+pub(crate) fn prev_track_result_message(
+    result: anyhow::Result<nokkvi_data::services::queue::PreviousOutcome>,
+    consume: bool,
+) -> Message {
+    match result {
+        Ok(nokkvi_data::services::queue::PreviousOutcome::BlockedConsumeShuffle) => {
+            Message::Toast(ToastMessage::Push(nokkvi_data::types::toast::Toast::new(
+                "Can't step back while Shuffle and Consume are both on",
+                nokkvi_data::types::toast::ToastLevel::Warning,
+            )))
+        }
+        Err(e) => {
+            warn!(" Previous failed to play its song: {e:#}");
+            play_failed_message(&e)
+        }
+        Ok(nokkvi_data::services::queue::PreviousOutcome::Stepped) if consume => Message::LoadQueue,
+        Ok(nokkvi_data::services::queue::PreviousOutcome::Stepped) => {
+            Message::Playback(PlaybackMessage::Tick)
+        }
+    }
+}
+
+/// What a seek whose reopen failed says (the old stream played on): one
+/// plain sentence per kind of failure, never the decoder's or the server's
+/// own text (the log has that).
+pub(crate) fn seek_failure_text(failure: nokkvi_data::audio::engine::SeekFailure) -> &'static str {
+    match failure {
+        nokkvi_data::audio::engine::SeekFailure::Busy => {
+            "Couldn't seek: the server is busy. Try again in a few seconds."
+        }
+        nokkvi_data::audio::engine::SeekFailure::NoAnswer => {
+            "Couldn't seek: the server didn't answer."
+        }
+        nokkvi_data::audio::engine::SeekFailure::Other => "Couldn't seek in this song.",
+    }
 }
 
 impl Nokkvi {
@@ -333,7 +466,7 @@ impl Nokkvi {
         self.shell_task(
             move |shell| async move {
                 let engine_arc = shell.audio_engine();
-                let engine = engine_arc.lock().await;
+                let mut engine = engine_arc.lock().await;
                 let pos = engine.position();
                 let dur = engine.duration();
                 let playing = engine.playing();
@@ -357,62 +490,94 @@ impl Nokkvi {
                     Some(station) if !engine.is_playing_source(&station.stream_url) => None,
                     _ => engine.live_icy_metadata(),
                 };
-                let engine_live_codec = engine.live_codec();
+                // The stream of the track the QUEUE names (a skip blend's
+                // incoming, not the outgoing still sounding), paired below
+                // with the queue's current song.
+                let queue_stream = engine.queue_track_stream().cloned();
+                let queue_source = engine.queue_track_source().map(str::to_owned);
                 let next_track_epoch = engine.next_track_epoch();
                 let seekable = engine.seekable();
                 let live_transcode = engine.is_live_transcode();
+                let seek_failure = engine.take_seek_failure();
+                let stream_lost = engine.take_stream_lost();
+                let seek_kind = engine.seek_kind();
                 drop(engine);
+                // A stream that opened has a codec; the facts of one that
+                // never did (nothing loaded, a load that failed) are blank.
+                let opened = queue_stream
+                    .as_ref()
+                    .filter(|stream| stream.codec.is_some());
+                let stream_status = crate::state::StreamStatus {
+                    codec: opened.and_then(|stream| stream.codec.clone()),
+                    live_bitrate: engine_live_bitrate,
+                    delivery: opened.map(|stream| stream.delivery),
+                    origin: StreamOrigin::Unknown,
+                    seek_kind,
+                    requested_transcode: queue_source
+                        .as_deref()
+                        .is_some_and(nokkvi_data::utils::artwork_url::requests_transcode),
+                };
 
                 let qm_arc = shell.queue().queue_manager();
                 let qm = qm_arc.lock().await;
                 let song = qm.get_current_song();
                 let current_index = qm.current_index();
                 let current_entry_id = current_index.and_then(|i| qm.entry_id_at(i));
-                let (title, artist, album, art_item, song_id, format_suffix, bitrate) =
-                    if let Some(station) = &radio_station {
-                        (
-                            station.name.clone(),
-                            String::new(), // Artist handles name sometimes? No, artist is empty
-                            String::new(),
-                            MprisArtItem::for_radio(station, icy_url),
-                            Some(station.id.clone()),
-                            engine_live_codec.unwrap_or_else(|| "radio".to_string()),
-                            engine_live_bitrate,
-                        )
-                    } else if let Some(s) = &song {
-                        // The file's extension (e.g. "flac"), or the codec a
-                        // live transcode actually sends.
-                        let suffix = song_format_label(
-                            &s.path,
-                            engine_live_codec.as_deref(),
-                            live_transcode,
-                        );
-                        // Prefer live decoder bitrate over static Navidrome API value
-                        let br = if engine_live_bitrate > 0 {
-                            engine_live_bitrate
-                        } else {
-                            s.bitrate.unwrap_or(0)
-                        };
-                        (
-                            s.title.clone(),
-                            s.artist.clone(),
-                            s.album.clone(),
-                            MprisArtItem::for_song(s, track_artwork),
-                            Some(s.id.clone()),
-                            suffix,
-                            br,
-                        )
+                let (
+                    title,
+                    artist,
+                    album,
+                    art_item,
+                    song_id,
+                    format_suffix,
+                    bitrate,
+                    stream_origin,
+                ) = if let Some(station) = &radio_station {
+                    (
+                        station.name.clone(),
+                        String::new(), // Artist handles name sometimes? No, artist is empty
+                        String::new(),
+                        MprisArtItem::for_radio(station, icy_url),
+                        Some(station.id.clone()),
+                        queue_stream
+                            .and_then(|stream| stream.codec)
+                            .unwrap_or_else(|| "radio".to_string()),
+                        engine_live_bitrate,
+                        StreamOrigin::Unknown,
+                    )
+                } else if let Some(s) = &song {
+                    // The file's extension (e.g. "flac"), or the codec a
+                    // transcode actually sends.
+                    let (suffix, origin) =
+                        queue_song_format(s, queue_source.as_deref(), queue_stream.as_ref());
+                    // Prefer live decoder bitrate over static Navidrome API value
+                    let br = if engine_live_bitrate > 0 {
+                        engine_live_bitrate
                     } else {
-                        (
-                            "Not Playing".to_string(),
-                            String::new(),
-                            String::new(),
-                            MprisArtItem::Nothing,
-                            None,
-                            String::new(),
-                            0,
-                        )
+                        s.bitrate.unwrap_or(0)
                     };
+                    (
+                        s.title.clone(),
+                        s.artist.clone(),
+                        s.album.clone(),
+                        MprisArtItem::for_song(s, track_artwork),
+                        Some(s.id.clone()),
+                        suffix,
+                        br,
+                        origin,
+                    )
+                } else {
+                    (
+                        "Not Playing".to_string(),
+                        String::new(),
+                        String::new(),
+                        MprisArtItem::Nothing,
+                        None,
+                        String::new(),
+                        0,
+                        StreamOrigin::Unknown,
+                    )
+                };
                 drop(qm);
 
                 // MPRIS art: `mpris_art_writer` owns the rules. A current song
@@ -489,10 +654,14 @@ impl Nokkvi {
                     bitrate,
                     seekable,
                     live_transcode,
+                    stream_origin,
                     live_icy_metadata: engine_live_icy_metadata,
                     bpm,
                     seek_epoch,
                     next_track_epoch,
+                    seek_failure,
+                    stream_lost,
+                    stream_status,
                 }
             },
             |update| Message::Playback(PlaybackMessage::PlaybackStateUpdated(Box::new(update))),
@@ -528,11 +697,26 @@ impl Nokkvi {
             bitrate,
             seekable,
             live_transcode,
+            stream_origin,
             live_icy_metadata,
             bpm,
             seek_epoch,
             next_track_epoch,
+            seek_failure,
+            stream_lost,
+            stream_status,
         } = update;
+
+        // A seek that reopened the stream failed (a busy server, the
+        // network); the old stream played on. The engine hands it over once.
+        if let Some(failure) = seek_failure {
+            self.toast_warn(seek_failure_text(failure));
+        }
+        // A requested transcode's stream dropped and could not be resumed:
+        // its song ended early. The engine hands it over once.
+        if stream_lost {
+            self.toast_warn("The server stopped sending this song.");
+        }
 
         // Whether this update's POSITION is still current. A different seek
         // epoch means a seek was requested or landed between the tick's engine
@@ -627,19 +811,45 @@ impl Nokkvi {
         self.playback.sample_rate = sample_rate;
         self.playback.seekable = seekable;
         self.playback.live_transcode = live_transcode;
+        // A `Pending` tick (the engine does not describe the song yet) keeps
+        // the origin the last tick found, as the badge does.
+        let origin = match stream_origin {
+            StreamOrigin::Pending => self.playback.stream.origin,
+            origin => origin,
+        };
+        self.playback.stream = crate::state::StreamStatus {
+            origin,
+            ..stream_status
+        };
         // Honest bit-perfect badge. Engaged only when the CURRENTLY-PLAYING
         // stream was actually built bit-perfect (build-time fact from the
         // renderer — NOT the live setting, which a mid-track toggle flips before
         // the running stream changes), playback is active, and this is queue
-        // playback (a lossy radio stream can't be bit-perfect). The renderer's
-        // build-time fact already encodes the native-PipeWire-volume requirement
+        // playback of the song's own file (a radio stream or anything the
+        // server made from the file can't be bit-perfect, and a stream whose
+        // origin can't be told never claims it). The renderer's build-time fact
+        // already encodes the native-PipeWire-volume requirement
         // (`bit_perfect_active`), so the cpal fallback reports false here.
         let mut bit_perfect_probe_task: Option<Task<Message>> = None;
-        let bit_perfect_engaged = bit_perfect_badge_engaged(
-            current_stream_bit_perfect,
-            playing,
-            self.active_playback.is_radio() || live_transcode,
-        );
+        let is_radio = self.active_playback.is_radio();
+        // A `Pending` stream (a skip's decoder building, or the engine on the
+        // next track before the queue) holds the verdict an earlier tick
+        // earned: what sounds is still the track that earned it, and the next
+        // one is judged once the engine describes it. It never turns the
+        // badge on, and a stop still turns it off. The status and the probe
+        // below run as on any engaged tick, so a rate change seen on a
+        // pending tick still resets the verdict and re-probes at once.
+        let pending = stream_origin == StreamOrigin::Pending;
+        let bit_perfect_engaged = if pending {
+            self.playback.bit_perfect_engaged
+                && bit_perfect_badge_engaged(current_stream_bit_perfect, playing, is_radio)
+        } else {
+            bit_perfect_badge_engaged(
+                current_stream_bit_perfect,
+                playing,
+                is_radio || stream_origin != StreamOrigin::OriginalFile,
+            )
+        };
         self.playback.bit_perfect_engaged = bit_perfect_engaged;
         // A genuine track / play-state change (vs a same-track periodic
         // re-probe) — bound once so the probe-dispatch gate and the
@@ -1380,7 +1590,7 @@ impl Nokkvi {
                     tracing::error!(" Play toggle cold-start failed: {}", e);
                     Message::Toast(crate::app_message::ToastMessage::Push(
                         nokkvi_data::types::toast::Toast::new(
-                            format!("Failed to start playback: {e}"),
+                            format!("Failed to start playback: {}", play_failure_text(&e)),
                             nokkvi_data::types::toast::ToastLevel::Error,
                         ),
                     ))
@@ -1430,7 +1640,7 @@ impl Nokkvi {
                         tracing::error!(" Play resume failed: {}", e);
                         Message::Toast(crate::app_message::ToastMessage::Push(
                             nokkvi_data::types::toast::Toast::new(
-                                format!("Failed to start playback: {e}"),
+                                format!("Failed to start playback: {}", play_failure_text(&e)),
                                 nokkvi_data::types::toast::ToastLevel::Error,
                             ),
                         ))
@@ -1457,7 +1667,7 @@ impl Nokkvi {
                         tracing::error!(" Play button cold-start failed: {}", e);
                         Message::Toast(crate::app_message::ToastMessage::Push(
                             nokkvi_data::types::toast::Toast::new(
-                                format!("Failed to start playback: {e}"),
+                                format!("Failed to start playback: {}", play_failure_text(&e)),
                                 nokkvi_data::types::toast::ToastLevel::Error,
                             ),
                         ))
@@ -1515,25 +1725,8 @@ impl Nokkvi {
         // Only reset visualizer on stop/queue clear, not on track changes.
         let is_consume = self.modes.consume;
         self.shell_task(
-            move |shell| async move {
-                let advanced = shell.next().await.unwrap_or(false);
-                (advanced, is_consume)
-            },
-            |(advanced, consume)| {
-                if !advanced {
-                    // End of queue — show toast (works for both button and MPRIS)
-                    Message::Toast(crate::app_message::ToastMessage::Push(
-                        nokkvi_data::types::toast::Toast::new(
-                            "No next track",
-                            nokkvi_data::types::toast::ToastLevel::Info,
-                        ),
-                    ))
-                } else if consume {
-                    Message::LoadQueue
-                } else {
-                    Message::Playback(PlaybackMessage::Tick)
-                }
-            },
+            move |shell| async move { (shell.next().await, is_consume) },
+            |(result, consume)| next_track_result_message(result, consume),
         )
     }
 
@@ -1547,8 +1740,9 @@ impl Nokkvi {
         // `handle_seek` so the anti-seek-fraud guard (advancing
         // `scrobble.last_position` to the target) and the radio gate both apply
         // unchanged, and no queue navigation / consume-removal is reached.
-        // A song the server transcodes on the fly can't rewind (no seeking),
-        // so Previous steps back instead, as it does within the threshold.
+        // A song the server transcodes on the fly that the engine can't
+        // reopen at an offset can't rewind (no seeking), so Previous steps
+        // back instead, as it does within the threshold.
         if self.settings.rewind_on_previous
             && self.playback.position >= PREV_RESTART_THRESHOLD_SECS
             && self.seek_available()
@@ -1561,29 +1755,8 @@ impl Nokkvi {
         // Only reset visualizer on stop/queue clear, not on track changes.
         let is_consume = self.modes.consume;
         self.shell_task(
-            move |shell| async move {
-                // `BlockedConsumeShuffle` means the step-back was refused
-                // because it would land on a consumed track under shuffle
-                // (re-inserting would strand a surviving track). Nothing
-                // changed, so surface a toast instead of reloading the queue.
-                let blocked = matches!(
-                    shell.previous().await,
-                    Ok(nokkvi_data::services::queue::PreviousOutcome::BlockedConsumeShuffle)
-                );
-                (blocked, is_consume)
-            },
-            |(blocked, consume)| {
-                if blocked {
-                    Message::Toast(ToastMessage::Push(nokkvi_data::types::toast::Toast::new(
-                        "Can't step back while Shuffle and Consume are both on",
-                        nokkvi_data::types::toast::ToastLevel::Warning,
-                    )))
-                } else if consume {
-                    Message::LoadQueue
-                } else {
-                    Message::Playback(PlaybackMessage::Tick)
-                }
-            },
+            move |shell| async move { (shell.previous().await, is_consume) },
+            |(result, consume)| prev_track_result_message(result, consume),
         )
     }
 
@@ -2051,12 +2224,13 @@ impl Nokkvi {
         if self.active_playback.is_radio() {
             return Task::none();
         }
-        // A song the server transcodes on the fly can only play front to
-        // back (the engine refuses the seek too). The slider, MPRIS, the IPC
+        // A song the server transcodes on the fly, and the engine can't
+        // reopen at an offset, can only play front to back (the engine
+        // refuses the seek too). The slider, MPRIS, the IPC
         // verb and Previous's rewind check first, so this backstop fires on a
         // deliberate act that beat the tick (never a held key): say why.
         if !self.seek_available() {
-            self.toast_info("Can't seek: the server is transcoding this song");
+            self.toast_info(self.playback.stream.seek_refusal());
             return Task::none();
         }
         // Mark the seek explicitly: advance last_position to the seek target so
@@ -2447,69 +2621,22 @@ impl Nokkvi {
             settings.normalization_level
         );
 
-        // Push crossfade + normalization settings to the audio engine (accumulated, not early-returned)
+        // Push the engine settings and the Streaming Quality to the backend
+        // (accumulated, not early-returned). Every step is a no-op when its
+        // value didn't change, which matters because every settings save
+        // lands here.
         let crossfade_task = if let Some(shell) = &self.app_service {
             let shell = shell.clone();
-            let enabled = settings.crossfade_enabled;
-            let bit_perfect = settings.bit_perfect;
-            let duration_secs = settings.crossfade_duration_secs;
-            let curve = settings.crossfade_curve;
-            let min_track_secs = settings.crossfade_min_track_secs;
-            let album_gapless = settings.crossfade_album_gapless;
-            let smooth_starts = settings.smooth_track_starts;
-            let fade_on_pause = settings.fade_on_pause;
-            let fade_pause_ms = settings.fade_pause_ms;
-            let fade_on_stop = settings.fade_on_stop;
-            let fade_stop_ms = settings.fade_stop_ms;
-            let fade_radio = settings.fade_radio_transitions;
-            let fade_on_skip = settings.fade_on_skip;
-            let fade_skip_secs = settings.fade_skip_secs;
-            let skip_silence = settings.skip_silence;
-            let crossfade_offset = settings.crossfade_offset_secs;
-            let bar_snap = settings.crossfade_bar_snap;
-            let mode = settings.volume_normalization;
-            let norm_target = settings.normalization_level.target_level();
-            let preamp_db = settings.replay_gain_preamp_db;
-            let fallback_db = settings.replay_gain_fallback_db;
-            let fallback_to_agc = settings.replay_gain_fallback_to_agc;
-            let prevent_clipping = settings.replay_gain_prevent_clipping;
+            let engine_settings = settings.clone();
             let eq_state = self.playback.eq_state.clone();
             Task::perform(
                 async move {
-                    let engine = shell.audio_engine();
-                    let mut engine_guard = engine.lock().await;
-                    engine_guard.set_crossfade_enabled(enabled).await;
-                    engine_guard.set_bit_perfect(bit_perfect).await;
-                    engine_guard.set_crossfade_duration(duration_secs);
-                    engine_guard.set_crossfade_curve(curve);
-                    engine_guard.set_crossfade_min_track_secs(min_track_secs);
-                    engine_guard
-                        .set_crossfade_album_gapless(album_gapless)
+                    shell
+                        .playback()
+                        .apply_player_settings(&engine_settings, viz_active, eq_state)
                         .await;
-                    engine_guard.set_smooth_track_starts(smooth_starts);
-                    engine_guard.set_transport_fades(
-                        fade_on_pause,
-                        fade_pause_ms,
-                        fade_on_stop,
-                        fade_stop_ms,
-                    );
-                    engine_guard.set_fade_radio_transitions(fade_radio);
-                    engine_guard.set_skip_fade(fade_on_skip, fade_skip_secs);
-                    engine_guard.set_skip_silence(skip_silence).await;
-                    engine_guard.set_crossfade_offset(crossfade_offset);
-                    engine_guard.set_crossfade_bar_snap(bar_snap).await;
-                    engine_guard.set_volume_normalization(
-                        mode,
-                        norm_target,
-                        preamp_db,
-                        fallback_db,
-                        fallback_to_agc,
-                        prevent_clipping,
-                    );
-                    engine_guard.set_eq_state(eq_state);
-                    engine_guard.set_visualizer_enabled(viz_active);
                 },
-                |_| Message::NoOp,
+                |()| Message::NoOp,
             )
         } else {
             Task::none()

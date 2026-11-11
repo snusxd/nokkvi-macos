@@ -183,8 +183,16 @@ impl AppService {
         Self::migrate_radio_creds_to_config(&storage);
 
         let auth_gateway = AuthGateway::new()?;
-        let queue_service = QueueService::new(auth_gateway.clone(), storage.clone())?;
         let settings_service = SettingsService::new(storage.clone())?;
+        // The queue builds every stream URL, so it starts from the persisted
+        // Streaming Quality; later changes arrive through the settings push.
+        let stream_quality = settings_service
+            .settings_manager()
+            .lock()
+            .await
+            .stream_quality();
+        let queue_service =
+            QueueService::new(auth_gateway.clone(), storage.clone(), stream_quality)?;
 
         // Initialize the queue service with persisted data
         queue_service.initialize().await;
@@ -277,6 +285,36 @@ impl AppService {
     /// Get reference to SettingsService for preferences, player settings, and hotkeys
     pub fn settings(&self) -> &SettingsService {
         &self.settings_service
+    }
+
+    /// What nokkvi's own player row on the server forces on its streams (a
+    /// transcoding, a max bit rate), for the read-only row in Settings →
+    /// Playback → Streaming Quality; `None` when it forces nothing or there
+    /// is no such row ([`AuthGateway::own_player`] says which row that is).
+    /// The forced transcoding's own row names its format. Read only: nokkvi
+    /// never writes either row.
+    pub async fn server_player_override(
+        &self,
+    ) -> Result<Option<crate::types::player_override::PlayerOverride>> {
+        use crate::types::player_override::{ForcedTranscoding, PlayerOverride, positive_kbps};
+        let Some(player) = self.auth_gateway.own_player(&self.storage).await? else {
+            return Ok(None);
+        };
+        let forced = if player.transcoding_id.is_empty() {
+            None
+        } else {
+            let transcoding = self
+                .auth_gateway
+                .build_native_api(crate::services::api::transcodings::TranscodingsApiService::new)
+                .await?
+                .get(&player.transcoding_id)
+                .await?;
+            Some(ForcedTranscoding {
+                format: transcoding.target_format,
+                default_bitrate_kbps: positive_kbps(transcoding.default_bit_rate),
+            })
+        };
+        Ok(PlayerOverride::of(forced, player.max_bit_rate))
     }
 
     /// Make this session's `/rest` requests send an OpenSubsonic API key when
@@ -1266,13 +1304,28 @@ impl AppService {
             .stream_session()
             .await
             .context("no server to stream from")?;
+        // The stream the engine plays for the queue's track: a song already
+        // playing is judged by the stream it actually opened.
+        let playing_source = self
+            .playback
+            .audio_engine()
+            .lock()
+            .await
+            .queue_track_source()
+            .map(str::to_owned);
+        let Some(stream_url) =
+            crate::services::waveform::scan_url(&session, &song, playing_source.as_deref())
+        else {
+            debug!(song = %song.id, "waveform scan skipped: the song streams as a transcode");
+            return Ok(crate::services::waveform::ScanEnd::SkippedTranscode);
+        };
         let (server_url, _) = self.auth_gateway.server_config().await;
         self.waveforms
             .scan(
                 &server_url,
                 &crate::services::waveform::WaveformIdentity::of(&song),
                 song.expected_duration_ms(),
-                &session.stream_url(&song.id),
+                &stream_url,
                 cancel,
             )
             .await
@@ -2440,7 +2493,7 @@ impl AppService {
             } else {
                 engine.stop().await;
                 engine
-                    .set_source(String::new(), crate::audio::SourceKind::Track, None)
+                    .set_source(String::new(), crate::audio::SourceKind::Track, None, None)
                     .await;
                 ClearQueueOutcome::EngineStopped
             }
@@ -3337,7 +3390,9 @@ mod tests {
         {
             let engine_arc = app.audio_engine();
             let mut engine = engine_arc.lock().await;
-            engine.load_track_with_rg(engine_source, None, None).await;
+            engine
+                .load_track_with_rg(engine_source, None, None, None)
+                .await;
             engine.force_playing_for_test();
         }
         (app, db_path)
@@ -3461,6 +3516,102 @@ mod tests {
         );
         assert_eq!(app.lastfm_username().as_deref(), Some("foogs"));
 
+        drop(app);
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// Whether the server honours `timeOffset` (its `transcodeOffset`
+    /// extension) is learnt per session from the login's probe: every login
+    /// builds a new service over the kept storage, which starts without it,
+    /// so a logout or another server never inherits the last server's
+    /// answer, and a server whose list lacks it turns it off.
+    #[tokio::test]
+    async fn the_transcode_offset_extension_starts_off_in_every_session() {
+        let db_path = test_db_path("test_app_transcode_offset_session");
+        let storage = StateStorage::new(db_path.clone()).expect("redb open");
+        let first = AppService::new_with_storage(storage.clone())
+            .await
+            .expect("app service");
+        let supported = |app: &AppService| {
+            let engine = app.audio_engine();
+            async move { engine.lock().await.transcode_offset_supported() }
+        };
+        assert!(!supported(&first).await, "off until the probe says so");
+
+        first
+            .playback()
+            .apply_server_extensions(&["formPost".to_owned(), "transcodeOffset".to_owned()])
+            .await;
+        let advertised = supported(&first).await;
+        first
+            .playback()
+            .apply_server_extensions(&["formPost".to_owned()])
+            .await;
+        let withdrawn = supported(&first).await;
+        first
+            .playback()
+            .apply_server_extensions(&["transcodeOffset".to_owned()])
+            .await;
+        drop(first);
+        let next_login = AppService::new_with_storage(storage)
+            .await
+            .expect("app service");
+        let next_session = supported(&next_login).await;
+
+        assert!(advertised);
+        assert!(!withdrawn, "a server without the extension turns it off");
+        assert!(!next_session, "the next session starts without it");
+        drop(next_login);
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// What nokkvi's own player row forces, end to end: the token session's
+    /// player forces a transcoding, whose own row names its format, and caps
+    /// the bit rate; the result says MP3 at the cap.
+    #[tokio::test]
+    async fn the_server_player_override_names_the_forced_format_and_cap() {
+        use crate::services::api::test_server::{Recorded, ScriptedServer};
+        let server = ScriptedServer::start(|r: &Recorded| {
+            if r.is("GET", "/api/player") {
+                return (
+                    200,
+                    r#"[{"id":"auto","name":"nokkvi [nokkvi]","client":"nokkvi",
+                         "userAgent":"nokkvi","userName":"alice",
+                         "lastSeen":"2026-11-10T08:00:00Z","transcodingId":"t-mp3",
+                         "maxBitRate":96,"hasApiKey":false}]"#
+                        .to_owned(),
+                );
+            }
+            if r.is("GET", "/api/transcoding/t-mp3") {
+                return (
+                    200,
+                    r#"{"id":"t-mp3","name":"mp3 audio","targetFormat":"mp3","defaultBitRate":192}"#
+                        .to_owned(),
+                );
+            }
+            (404, r#""not found""#.to_owned())
+        })
+        .await;
+        let db_path = test_db_path("test_app_server_player_override");
+        let storage = StateStorage::new(db_path.clone()).expect("redb open");
+        let app = AppService::new_with_storage(storage)
+            .await
+            .expect("app service");
+        app.auth()
+            .resume_session(
+                server.base_url.clone(),
+                "alice".to_string(),
+                "jwt".to_string(),
+                "u=alice&s=salt&t=token".to_string(),
+            )
+            .await
+            .expect("resume");
+
+        let found = app.server_player_override().await.expect("read");
+
+        let found = found.expect("an override");
+        assert_eq!(found.summary(), "MP3 at 96 kbps");
+        assert!(server.requests().iter().all(|r| r.method == "GET"));
         drop(app);
         let _ = std::fs::remove_file(&db_path);
     }

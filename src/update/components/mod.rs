@@ -1781,6 +1781,7 @@ impl Nokkvi {
             session_user_id: _,
             screen: _,
             server_version: _,
+            server_player_override: _,
             open_subsonic_extensions: _,
             // Password, error and in-progress flag; URL and username stay.
             login_page: _,
@@ -1988,6 +1989,7 @@ impl Nokkvi {
         self.screen = crate::Screen::Login;
         self.login_page.reset_for_session();
         self.server_version = None;
+        self.server_player_override = None;
         self.open_subsonic_extensions = None;
         self.rules_editor.reset_for_session();
 
@@ -2111,8 +2113,14 @@ impl Nokkvi {
 
 /// Hand `url` to the desktop's opener (`xdg-open`). A failure is logged, not
 /// toasted: the link was the user's own click, and the log names the URL.
+///
+/// A test build opens nothing: a handler test that activates a link must not
+/// start a browser on the desktop running `cargo test`.
 pub(crate) fn open_external_url(url: &str) {
+    #[cfg(not(test))]
     if let Err(e) = std::process::Command::new("xdg-open").arg(url).spawn() {
         tracing::warn!("Failed to open URL '{url}': {e}");
     }
+    #[cfg(test)]
+    tracing::debug!("Test build: not opening '{url}'");
 }

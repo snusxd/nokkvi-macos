@@ -28,10 +28,14 @@ fn threshold_crossing_update(song_id: &str, pos: u32, dur: u32) -> PlaybackState
         bitrate: 1411,
         seekable: true,
         live_transcode: false,
+        stream_origin: crate::state::StreamOrigin::OriginalFile,
         live_icy_metadata: None,
         bpm: None,
         seek_epoch: 0,
         next_track_epoch: 0,
+        seek_failure: None,
+        stream_lost: false,
+        stream_status: crate::state::StreamStatus::default(),
         station_id: None,
     }
 }

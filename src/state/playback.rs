@@ -1,6 +1,113 @@
 //! Playback state: the active playback source, player-bar fields, and modes.
 
-use nokkvi_data::types::queue::RepeatMode;
+use nokkvi_data::{
+    audio::{StreamDelivery, StreamFacts},
+    types::queue::RepeatMode,
+};
+
+/// What the tick can tell about the queue song's stream: the song's own
+/// file, something the server made from it, not known, or not yet this
+/// song's. It decides the BIT-PERFECT badge (only the file can show it, and
+/// `Pending` holds the last verdict) and the format label
+/// (`update::playback::song_format_label`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamOrigin {
+    /// The file itself: the answer is sized and its byte length is the
+    /// song's file size (Navidrome serves a raw file at its size on disk,
+    /// which `Song.size` holds as of the scan the queue's copy came from).
+    OriginalFile,
+    /// Something else: a live transcode (no length), or a sized answer of
+    /// another length (a finished transcode from the server's cache, or a
+    /// re-encode to the same codec).
+    Transcode,
+    /// Can't tell: the song's size is unknown, or the stream has no length
+    /// and is no live transcode (a queue song the server sent with ICY
+    /// headers, read as a live stream).
+    Unknown,
+    /// The engine does not describe this song yet: a skip's decoder is
+    /// still building, or the engine has moved on to another song before the
+    /// queue has (an auto crossfade's finalize or a seek in its finalize gap
+    /// promotes the next track a task hop before the queue follows; a hard
+    /// load can land between the tick's engine and queue reads).
+    Pending,
+}
+
+impl StreamOrigin {
+    /// Classify the stream the engine reports for the queue's track
+    /// (`CustomAudioEngine::queue_track_stream`; the caller passes `None`
+    /// while it does not describe the song yet, which reads `Pending`)
+    /// against the song's file size (`Song::size`, 0 when the server sent
+    /// none). Navidrome always sends the size, so an unknown one proves
+    /// nothing and reads `Unknown`. Nothing refreshes the queue's copy of a
+    /// song (the pool persists in redb), so a file whose size changed (a
+    /// retag) reads `Transcode` until Navidrome rescans it AND the song is
+    /// queued again: it loses the badge, never gains one.
+    pub fn of(stream: Option<&StreamFacts>, song_size: u64) -> Self {
+        let Some(stream) = stream else {
+            return Self::Pending;
+        };
+        match stream.byte_len {
+            _ if stream.delivery == StreamDelivery::Unsized => Self::Transcode,
+            _ if song_size == 0 => Self::Unknown,
+            Some(len) if len == song_size => Self::OriginalFile,
+            Some(_) => Self::Transcode,
+            None => Self::Unknown,
+        }
+    }
+}
+
+/// What the tick tells of the stream that plays (the queue's track, or a
+/// station), for `nokkvi status` and the seek refusal's wording. Read off
+/// the engine with the rest of the tick; the queue's track only once the
+/// engine describes it (otherwise the last one's stays).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamStatus {
+    /// The codec the decoder decodes (`flac`, `opus`, ...), `None` with
+    /// nothing open.
+    pub codec: Option<String>,
+    /// The decoder's live compressed bitrate (kbps), 0 until it decoded a
+    /// packet; a seek that reopens the stream starts it over.
+    pub live_bitrate: u32,
+    /// How the bytes arrive, `None` with nothing open.
+    pub delivery: Option<StreamDelivery>,
+    /// Whether the stream is the song's own file ([`StreamOrigin`]); a
+    /// `Pending` tick keeps the last verdict.
+    pub origin: StreamOrigin,
+    /// How a seek on it moves.
+    pub seek_kind: nokkvi_data::audio::engine::SeekKind,
+    /// Whether nokkvi asked the server for this transcode (its URL carries
+    /// `format`): a live transcode nokkvi did not ask for is one the server
+    /// chose on its own.
+    pub requested_transcode: bool,
+}
+
+impl StreamStatus {
+    /// Why a seek on this stream, which can't seek, is refused: the words
+    /// of the toast and of `nokkvi seek`'s refusal. A smaller copy nokkvi
+    /// asked for refuses only on a server without `transcodeOffset`; any
+    /// other live transcode is one the server chose on its own (a
+    /// transcoding set on nokkvi's player).
+    pub fn seek_refusal(&self) -> &'static str {
+        if self.requested_transcode {
+            "Can't seek in a smaller copy on this server"
+        } else {
+            "Can't seek: your server is choosing this song's format"
+        }
+    }
+}
+
+impl Default for StreamStatus {
+    fn default() -> Self {
+        Self {
+            codec: None,
+            live_bitrate: 0,
+            delivery: None,
+            origin: StreamOrigin::Unknown,
+            seek_kind: nokkvi_data::audio::engine::SeekKind::None,
+            requested_transcode: false,
+        }
+    }
+}
 
 /// Honest bit-perfect status for the now-playing indicator. Derived from the
 /// bit-perfect mode, the track's rate, and the REAL device clock rate (read
@@ -124,8 +231,10 @@ pub struct PlaybackState {
     pub bit_perfect_status: BitPerfectStatus,
     /// Whether the honest bit-perfect badge is currently live for the playing
     /// track (the stream was built bit-perfect, playback is active, and it is
-    /// queue — not radio). Recomputed each snapshot and used as the staleness
-    /// guard for the off-thread device-rate probe result.
+    /// a queue song's own file — not radio, not a transcode, not a stream
+    /// whose origin can't be told: [`StreamOrigin`]). Recomputed each
+    /// snapshot and used as the staleness guard for the off-thread
+    /// device-rate probe result.
     pub bit_perfect_engaged: bool,
     /// Countdown (in 100ms ticks) until the next `/proc/asound` device-rate
     /// re-probe. Throttles the blocking walk off the hot path while still
@@ -159,13 +268,16 @@ pub struct PlaybackState {
     /// Bitrate in kbps (e.g., 320, 1411)
     pub bitrate: u32,
     /// Whether the engine can seek what it plays, from the last tick: false
-    /// for a song the server transcodes on the fly (and for a station).
+    /// for a song the server transcodes on the fly that the engine can't
+    /// reopen at an offset (and for a station).
     /// The seek producers and the progress bar read it through
     /// `Nokkvi::seek_available`.
     pub seekable: bool,
     /// Whether the playing song is the server's live transcode, from the
     /// last tick. Such a stream is never shown as bit-perfect.
     pub live_transcode: bool,
+    /// The stream that plays, from the last tick ([`StreamStatus`]).
+    pub stream: StreamStatus,
     /// Throttle timestamp for volume persistence to storage
     pub volume_persist_throttle: Option<std::time::Instant>,
     /// Set while volume saves keep failing, so only the first failure of a
@@ -210,6 +322,8 @@ impl PlaybackState {
         self.playing = false;
         self.paused = false;
         self.position = 0;
+        // Nothing plays any more, so no stream is described.
+        self.stream = StreamStatus::default();
     }
 }
 
@@ -235,6 +349,7 @@ impl Default for PlaybackState {
             bitrate: 0,
             seekable: true,
             live_transcode: false,
+            stream: StreamStatus::default(),
             volume_persist_throttle: None,
             volume_save_failing: false,
             play_attempt: super::StaleDropGen::default(),

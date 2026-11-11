@@ -128,6 +128,12 @@ impl PlaybackController {
                         return Ok(());
                     };
                     let mut engine = ea.lock().await;
+                    // The Streaming Quality as of now, under the engine lock: a
+                    // settings push holds this lock while it changes the setting
+                    // and drops the prepared track, so one landing between the
+                    // snapshot above and here must not leave the fresh load on
+                    // the old setting.
+                    let session = session.with_quality(qvm.stream_quality());
                     // Phase 1 lock-discipline: hold the outer `nav` mutex only
                     // for the queue-mutation half of the work. Drop it before
                     // running the engine ops so concurrent navigator calls
@@ -199,6 +205,19 @@ impl PlaybackController {
         self.audio_engine.clone()
     }
 
+    /// Take the OpenSubsonic extensions the server advertises (the login's
+    /// `getOpenSubsonicExtensions` probe): with `transcodeOffset`, a
+    /// transcode nokkvi asked for can seek by reopening at an offset. The
+    /// engine starts without it, so a session whose probe failed stays
+    /// unable to seek such a stream, as before.
+    pub async fn apply_server_extensions(&self, names: &[String]) {
+        let supported = names.iter().any(|name| name == TRANSCODE_OFFSET_EXTENSION);
+        self.audio_engine
+            .lock()
+            .await
+            .set_transcode_offset_supported(supported);
+    }
+
     /// The controller's hard-load epilogue: [`StagedSong::load`] under the
     /// held engine lock, discharge the queue mutation's reset (even when
     /// `play()` failed: the queue changed either way), then name the song on
@@ -226,6 +245,80 @@ impl PlaybackController {
             .await;
         drop(engine);
         Ok(())
+    }
+
+    /// Apply a settings load to the engine and to the stream URL builder.
+    /// Every settings save and config.toml hot reload runs this (the UI's
+    /// `handle_player_settings_loaded`), so each step must be a no-op when
+    /// its value didn't change: the engine setters compare, and the
+    /// Streaming Quality push ([`Self::push_stream_quality`]) does too.
+    /// `visualizer_enabled` is the UI's feed decision (`visualizer_feed_wanted`)
+    /// and `eq_state` its shared EQ gains.
+    pub async fn apply_player_settings(
+        &self,
+        settings: &crate::types::player_settings::LivePlayerSettings,
+        visualizer_enabled: bool,
+        eq_state: crate::audio::EqState,
+    ) {
+        let mut engine = self.audio_engine.lock().await;
+        Self::push_stream_quality(
+            &self.queue_service,
+            &mut engine,
+            crate::types::stream_quality::StreamQuality::of(settings),
+        )
+        .await;
+        engine
+            .set_crossfade_enabled(settings.crossfade_enabled)
+            .await;
+        engine.set_bit_perfect(settings.bit_perfect).await;
+        engine.set_crossfade_duration(settings.crossfade_duration_secs);
+        engine.set_crossfade_curve(settings.crossfade_curve);
+        engine.set_crossfade_min_track_secs(settings.crossfade_min_track_secs);
+        engine
+            .set_crossfade_album_gapless(settings.crossfade_album_gapless)
+            .await;
+        engine.set_smooth_track_starts(settings.smooth_track_starts);
+        engine.set_transport_fades(
+            settings.fade_on_pause,
+            settings.fade_pause_ms,
+            settings.fade_on_stop,
+            settings.fade_stop_ms,
+        );
+        engine.set_fade_radio_transitions(settings.fade_radio_transitions);
+        engine.set_skip_fade(settings.fade_on_skip, settings.fade_skip_secs);
+        engine.set_skip_silence(settings.skip_silence).await;
+        engine.set_crossfade_offset(settings.crossfade_offset_secs);
+        engine
+            .set_crossfade_bar_snap(settings.crossfade_bar_snap)
+            .await;
+        engine.set_volume_normalization(
+            settings.volume_normalization,
+            settings.normalization_level.target_level(),
+            settings.replay_gain_preamp_db,
+            settings.replay_gain_fallback_db,
+            settings.replay_gain_fallback_to_agc,
+            settings.replay_gain_prevent_clipping,
+        );
+        engine.set_eq_state(eq_state);
+        engine.set_visualizer_enabled(visualizer_enabled);
+    }
+
+    /// Put `quality` in force for every stream URL built from now on, under
+    /// the engine lock the caller holds (so a transition that also holds it
+    /// sees the setting and the reset together). On a real change the
+    /// prepared next track is dropped so the next song opens with the new
+    /// params, except while an AUTO crossfade blends: the reset would cancel
+    /// the blend back to its outgoing, and its prepared track has already
+    /// left the slot (it is the incoming), so the next prep, after the blend,
+    /// reads the new setting anyway. The song playing keeps its stream.
+    pub(crate) async fn push_stream_quality(
+        queue: &QueueService,
+        engine: &mut CustomAudioEngine,
+        quality: crate::types::stream_quality::StreamQuality,
+    ) {
+        let effect = queue.set_stream_quality(quality);
+        let blending = engine.auto_crossfade_live();
+        effect.only_if(!blending).apply_locked(engine).await;
     }
 
     /// The session a requested play streams from: an error when there is
@@ -289,7 +382,7 @@ impl PlaybackController {
                     .get_song(&song_id)
                     .cloned();
                 if let Some(song) = song {
-                    let stream_url = session.stream_url(&song.id);
+                    let stream_url = session.stream_url(&song);
                     let staged =
                         StagedSong::new(&song.id, &stream_url, Some(&song), StageStart::Play);
                     return self.stage_and_name(audio, staged, None).await;
@@ -333,7 +426,7 @@ impl PlaybackController {
             drop(queue_manager);
 
             if let Some(song) = song {
-                let stream_url = session.stream_url(&song.id);
+                let stream_url = session.stream_url(&song);
 
                 // Sync reactive current_index for UI highlighting
                 self.queue_service.refresh_from_queue().await;
@@ -373,6 +466,9 @@ impl PlaybackController {
         };
 
         let mut engine = self.audio_engine.lock().await;
+        // Re-stamped under the engine lock, like the completion's (a push
+        // between the snapshot and the lock would otherwise be missed).
+        let session = session.with_quality(self.queue_service.stream_quality());
         let queue_navigator = self.queue_navigator.lock().await;
         let skip_fade = engine.skip_fade_mode();
 
@@ -446,6 +542,8 @@ impl PlaybackController {
         };
 
         let mut engine = self.audio_engine.lock().await;
+        // Re-stamped under the engine lock (see `next`).
+        let session = session.with_quality(self.queue_service.stream_quality());
         let queue_navigator = self.queue_navigator.lock().await;
         let skip_fade = engine.skip_fade_mode();
 
@@ -526,9 +624,8 @@ impl PlaybackController {
     pub async fn seek(&self, position_seconds: f64) -> Result<u64> {
         let position_ms = (position_seconds * 1000.0) as u64;
         let mut engine = self.audio_engine.lock().await;
-        let outcome = engine.seek(position_ms).await;
-        let landed = engine.position();
-        drop(engine);
+        let begun = engine.begin_seek(position_ms).await;
+        let (outcome, landed) = finish_begun_seek(&self.audio_engine, engine, begun).await;
         self.after_seek(outcome).await;
         Ok(landed)
     }
@@ -548,6 +645,17 @@ impl PlaybackController {
     /// The low clamp is [`offset_position_ms`]; the high clamp is the engine's
     /// own `min(duration)`, so a jump past the end ends the track exactly as
     /// dragging the slider there does.
+    ///
+    /// On a track that seeks by reopening its stream at an offset (a
+    /// transcode nokkvi asked for, [`CustomAudioEngine::seek_reopens`]), every
+    /// seek is a new transcode on the server, so a held key must not send one
+    /// per repeat: the target is held ([`CustomAudioEngine::defer_seek`]) and
+    /// sent once no repeat came for [`SEEK_SETTLE`], by a tracked task. The
+    /// engine reports the held target meanwhile, so the base of the next
+    /// repeat and the clock are both the target the repeats add up to, and
+    /// this returns at once with it. Every other seek runs here, as before.
+    ///
+    /// [`SEEK_SETTLE`]: crate::audio::engine::SEEK_SETTLE
     pub async fn seek_relative(&self, delta_seconds: f64) -> Result<u64> {
         let mut engine = self.audio_engine.lock().await;
         let base = engine.position();
@@ -559,9 +667,25 @@ impl PlaybackController {
             // key: the first fraction of the track machine-guns.
             return Ok(base);
         };
-        let outcome = engine.seek(target).await;
-        let landed = engine.position();
-        drop(engine);
+        // A known length: a track is playing or paused (and no skip is
+        // landing, which the seek below resolves first).
+        let duration = engine.duration();
+        if duration > 0 && engine.seek_reopens() {
+            // The engine's own `min(duration)` is the high clamp, as below.
+            let first = engine.defer_seek(target.min(duration));
+            drop(engine);
+            if first {
+                let controller = self.clone();
+                self.task_manager.spawn("seek_settle", move || async move {
+                    if let Some(outcome) = run_seek_settle(&controller.audio_engine).await {
+                        controller.after_seek(outcome).await;
+                    }
+                });
+            }
+            return Ok(target.min(duration));
+        }
+        let begun = engine.begin_seek(target).await;
+        let (outcome, landed) = finish_begun_seek(&self.audio_engine, engine, begun).await;
         self.after_seek(outcome).await;
         Ok(landed)
     }
@@ -726,6 +850,12 @@ impl PlaybackController {
             if engine.is_next_track_prepared().await {
                 return false; // Already prepared
             }
+            // A seek past the song's end has just ended it: the completion
+            // loads the next song itself, and its stop would throw a prep
+            // away after the server started its transcode.
+            if engine.track_ended_by_seek() {
+                return false;
+            }
             (engine.transition_prep_cfg(), engine.prep_ticket().await)
         };
 
@@ -742,6 +872,7 @@ impl PlaybackController {
             url: String,
             replay_gain: Option<crate::types::song::ReplayGain>,
             expected_duration_ms: Option<u64>,
+            expected_file_size: Option<u64>,
             directives: crate::audio::engine::PreparedTransitionDirectives,
         }
         let (prep, is_repeat_track): (Option<PeekedPrep>, bool) = {
@@ -755,7 +886,7 @@ impl PlaybackController {
                 let next_song = peeked.song().clone();
                 let reason = peeked.reason();
                 drop(peeked); // explicit: clears queued; gapless prep proceeds with the captured data
-                let url = session.stream_url(&next_song.id);
+                let url = session.stream_url(&next_song);
                 // The per-transition verdicts ride down to
                 // `store_prepared_decoder` (the engine boundary carries no
                 // Song metadata). An unresolvable current song can't prove a
@@ -802,6 +933,7 @@ impl PlaybackController {
                         url,
                         replay_gain: next_song.replay_gain.clone(),
                         expected_duration_ms: next_song.expected_duration_ms(),
+                        expected_file_size: next_song.expected_file_size(),
                         directives: crate::audio::engine::PreparedTransitionDirectives {
                             suppress_crossfade,
                             duration_override_ms,
@@ -820,6 +952,7 @@ impl PlaybackController {
             url,
             replay_gain,
             expected_duration_ms,
+            expected_file_size,
             directives,
         }) = prep
         else {
@@ -860,6 +993,7 @@ impl PlaybackController {
                 // This is the slow part - downloads ~20MB of audio
                 let mut decoder = crate::audio::AudioDecoder::default();
                 decoder.set_expected_duration_ms(expected_duration_ms);
+                decoder.set_expected_file_size(expected_file_size);
                 // M8: transition decoders opt into the leading-silence trim
                 // (user-initiated loads stay honest; bit-perfect gated off
                 // engine-side in `transition_prep_cfg`).
@@ -922,7 +1056,7 @@ impl PlaybackController {
 
         // 2. Build stream URL for the target song
         let song = &songs[play_index];
-        let stream_url = session.stream_url(&song.id);
+        let stream_url = session.stream_url(song);
 
         // 3-4. Load, play (or blend, per "Fade on Skip"), discharge the
         //      set_queue reset, and update the navigator so consume mode
@@ -1084,12 +1218,11 @@ impl PlaybackController {
         self.queue_service.refresh_from_queue().await;
 
         // 3. Build stream URL and play
-        let stream_url = session.stream_url(&song_id);
-
         let song = {
             let qm = queue_manager.lock().await;
             qm.get_song(&song_id).cloned()
         };
+        let stream_url = session.stream_url_for(&song_id, song.as_ref());
 
         self.load_play_and_set_current(&stream_url, song, reposition_effect, song_id)
             .await?;
@@ -1247,7 +1380,7 @@ impl PlaybackController {
                 let stream_url = self
                     .require_stream_session()
                     .await?
-                    .stream_url(&new_song_id);
+                    .stream_url_for(&new_song_id, song.as_ref());
 
                 // Always swap the engine source to the new current so the
                 // engine never keeps streaming (or stays cued on) the deleted
@@ -1333,7 +1466,10 @@ impl PlaybackController {
             .get_song(song_id)
             .cloned();
 
-        let stream_url = self.require_stream_session().await?.stream_url(song_id);
+        let stream_url = self
+            .require_stream_session()
+            .await?
+            .stream_url_for(song_id, song.as_ref());
 
         // The offset is consumed inside play()'s fresh-start branch — at once
         // when the engine was playing, otherwise at the user's next Play.
@@ -1468,6 +1604,7 @@ async fn complete_skip_fade(
     // Phase 2 — the slow network part, no locks held.
     let mut decoder = crate::audio::AudioDecoder::default();
     decoder.set_expected_duration_ms(plan.song.expected_duration_ms());
+    decoder.set_expected_file_size(plan.song.expected_file_size());
     let built = decoder.init(&plan.stream_url).await;
 
     // Phase 3 — brief engine lock to fire (or fall back).
@@ -1590,6 +1727,60 @@ fn offset_position_ms(base_ms: u64, delta_seconds: f64) -> u64 {
 fn relative_seek_target(base_ms: u64, delta_seconds: f64) -> Option<u64> {
     let target = offset_position_ms(base_ms, delta_seconds);
     (target != base_ms).then_some(target)
+}
+
+/// The OpenSubsonic extension a server advertises when it honours
+/// `timeOffset` on a transcode.
+pub const TRANSCODE_OFFSET_EXTENSION: &str = "transcodeOffset";
+
+/// Finish a seek begun under `engine` ([`CustomAudioEngine::begin_seek`]):
+/// one that reopens its stream waits for the server with the engine lock
+/// RELEASED, then takes it again to land the answer. Returns the outcome and
+/// where the engine then stands (ms).
+async fn finish_begun_seek(
+    engine_mutex: &Mutex<CustomAudioEngine>,
+    engine: tokio::sync::MutexGuard<'_, CustomAudioEngine>,
+    begun: crate::audio::engine::SeekBegun,
+) -> (crate::audio::engine::SeekOutcome, u64) {
+    use crate::audio::engine::SeekBegun;
+
+    match begun {
+        SeekBegun::Done(outcome) => (outcome, engine.position()),
+        SeekBegun::Reopen(ticket) => {
+            drop(engine);
+            let answer = ticket.open().await;
+            let mut engine = engine_mutex.lock().await;
+            let outcome = engine.finish_seek(answer).await;
+            (outcome, engine.position())
+        }
+    }
+}
+
+/// Wait out a settling relative seek ([`CustomAudioEngine::defer_seek`]),
+/// then run it under the engine lock. A repeat that lands meanwhile moves
+/// the deadline, so the seek goes to the server [`SEEK_SETTLE`] after the
+/// last repeat. Returns its outcome, or `None` when something else replaced
+/// it (another seek, a track change, a stop).
+///
+/// [`SEEK_SETTLE`]: crate::audio::engine::SEEK_SETTLE
+async fn run_seek_settle(
+    engine_mutex: &Mutex<CustomAudioEngine>,
+) -> Option<crate::audio::engine::SeekOutcome> {
+    use crate::audio::engine::SettleStep;
+
+    let mut due = engine_mutex.lock().await.settling_seek_due()?;
+    loop {
+        tokio::time::sleep_until(due).await;
+        let mut engine = engine_mutex.lock().await;
+        match engine.take_settled_seek(tokio::time::Instant::now()) {
+            SettleStep::Wait(later) => due = later,
+            SettleStep::Fire(target_ms) => {
+                let begun = engine.begin_seek(target_ms).await;
+                return Some(finish_begun_seek(engine_mutex, engine, begun).await.0);
+            }
+            SettleStep::Gone => return None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1860,7 +2051,7 @@ mod tests {
             .await;
         let engine_arc = fx.playback.audio_engine();
         let mut e = engine_arc.lock().await;
-        e.load_track_with_rg("http://127.0.0.1:9/rest/stream?id=a&_=1", None, None)
+        e.load_track_with_rg("http://127.0.0.1:9/rest/stream?id=a&_=1", None, None, None)
             .await;
         e.force_playing_for_test();
         let seq = fx
@@ -2375,7 +2566,11 @@ mod tests {
             )
             .await?;
         }
-        let queue = QueueService::new(auth, storage_q)?;
+        let queue = QueueService::new(
+            auth,
+            storage_q,
+            crate::types::stream_quality::StreamQuality::default(),
+        )?;
         let settings = SettingsService::new(storage_s)?;
         let tm = Arc::new(TaskManager::new());
         let (playback, _loop_rx, _qc_rx) =
@@ -2470,7 +2665,7 @@ mod tests {
         {
             let engine_arc = fx.playback.audio_engine();
             let mut e = engine_arc.lock().await;
-            e.load_track_with_rg("http://127.0.0.1:9/rest/stream?id=b&_=1", None, None)
+            e.load_track_with_rg("http://127.0.0.1:9/rest/stream?id=b&_=1", None, None, None)
                 .await;
             e.force_playing_for_test();
             e.plan_skip_fade().await;
@@ -2507,7 +2702,7 @@ mod tests {
         {
             let engine_arc = fx.playback.audio_engine();
             let mut e = engine_arc.lock().await;
-            e.load_track_with_rg("http://127.0.0.1:9/rest/stream?id=b&_=1", None, None)
+            e.load_track_with_rg("http://127.0.0.1:9/rest/stream?id=b&_=1", None, None, None)
                 .await;
             e.force_playing_for_test();
         }
@@ -2683,7 +2878,7 @@ mod tests {
             let mut e = engine_arc.lock().await;
             // Stage a station as the live source, then mark the engine playing
             // — `load_track_with_rg` does no network I/O on a stopped engine.
-            e.load_track_with_rg(STATION, None, None).await;
+            e.load_track_with_rg(STATION, None, None, None).await;
             e.force_playing_for_test();
         }
 
@@ -2754,5 +2949,418 @@ mod tests {
             "engine Arc strong count did not reach zero: completion_callback \
              still holds a strong reference (cycle not broken)"
         );
+    }
+
+    // ── Settings load: the Streaming Quality push ───────────────────────────
+
+    use crate::types::{
+        player_settings::{LivePlayerSettings, StreamFormat, StreamMaxBitrate},
+        settings::PersistedPlayerSettings,
+    };
+
+    /// The live settings a fresh install loads.
+    fn shipped_settings() -> LivePlayerSettings {
+        use crate::services::settings_tables::{
+            dump_columns_tab_player_settings, dump_general_tab_player_settings,
+            dump_interface_tab_player_settings, dump_playback_tab_player_settings,
+        };
+        let persisted = PersistedPlayerSettings::default();
+        let mut live = LivePlayerSettings::default();
+        dump_general_tab_player_settings(&persisted, &mut live);
+        dump_interface_tab_player_settings(&persisted, &mut live);
+        dump_playback_tab_player_settings(&persisted, &mut live);
+        dump_columns_tab_player_settings(&persisted, &mut live);
+        live
+    }
+
+    fn streaming(format: StreamFormat, cap: StreamMaxBitrate) -> LivePlayerSettings {
+        LivePlayerSettings {
+            stream_format: format,
+            stream_max_bitrate: cap,
+            ..shipped_settings()
+        }
+    }
+
+    /// A controller that already took the shipped settings once, so a later
+    /// load changes only what the test changes.
+    async fn settled_fixture() -> Result<ClickFixture> {
+        let fx = click_fixture().await?;
+        fx.playback
+            .apply_player_settings(&shipped_settings(), false, crate::audio::EqState::default())
+            .await;
+        Ok(fx)
+    }
+
+    async fn load(fx: &ClickFixture, settings: &LivePlayerSettings) {
+        fx.playback
+            .apply_player_settings(settings, false, crate::audio::EqState::default())
+            .await;
+    }
+
+    async fn epoch(fx: &ClickFixture) -> u64 {
+        fx.playback.audio_engine().lock().await.next_track_epoch()
+    }
+
+    async fn flac_url(fx: &ClickFixture) -> String {
+        let flac = crate::types::song::Song {
+            suffix: Some("flac".to_string()),
+            bitrate: Some(900),
+            ..click_song("f1")
+        };
+        fx.queue
+            .stream_session()
+            .await
+            .expect("a session")
+            .stream_url(&flac)
+    }
+
+    /// A settings load puts the Streaming Quality in force for the URLs
+    /// built after it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_settings_load_puts_the_streaming_quality_in_force() -> Result<()> {
+        let fx = settled_fixture().await?;
+        assert!(!flac_url(&fx).await.contains("format="));
+
+        load(
+            &fx,
+            &streaming(StreamFormat::Opus, StreamMaxBitrate::Kbps128),
+        )
+        .await;
+
+        assert!(flac_url(&fx).await.contains("&format=opus&maxBitRate=128&"));
+        Ok(())
+    }
+
+    /// A real change drops the prepared next track once; the same settings
+    /// loaded again (every save re-delivers them) drop nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_streaming_quality_change_resets_the_next_track_once() -> Result<()> {
+        let fx = settled_fixture().await?;
+        let before = epoch(&fx).await;
+        let opus = streaming(StreamFormat::Opus, StreamMaxBitrate::Kbps128);
+
+        load(&fx, &opus).await;
+        assert_eq!(epoch(&fx).await, before + 1);
+        load(&fx, &opus).await;
+        assert_eq!(
+            epoch(&fx).await,
+            before + 1,
+            "an unchanged load resets nothing"
+        );
+        Ok(())
+    }
+
+    /// Under Original the cap is ignored, so clicking through Max Bitrate
+    /// there drops nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_max_bitrate_change_under_original_keeps_the_prepared_next_track() -> Result<()> {
+        let fx = settled_fixture().await?;
+        let before = epoch(&fx).await;
+
+        for cap in StreamMaxBitrate::ALL {
+            load(&fx, &streaming(StreamFormat::Original, cap)).await;
+        }
+
+        assert_eq!(epoch(&fx).await, before);
+        Ok(())
+    }
+
+    /// A change while an AUTO crossfade blends must not cancel the blend
+    /// (the incoming cut out mid fade-in, the outgoing jumped back to full
+    /// volume, and the incoming restarted from 0:00 later). The setting is
+    /// still in force for the URLs built next.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_streaming_quality_change_during_an_auto_crossfade_keeps_the_blend() -> Result<()> {
+        let fx = settled_fixture().await?;
+        let _keepalive = {
+            let engine = fx.playback.audio_engine();
+            let mut engine = engine.lock().await;
+            engine.force_live_auto_crossfade_for_test()
+        };
+        let before = epoch(&fx).await;
+
+        load(
+            &fx,
+            &streaming(StreamFormat::Opus, StreamMaxBitrate::Kbps128),
+        )
+        .await;
+
+        {
+            let engine = fx.playback.audio_engine();
+            let engine = engine.lock().await;
+            assert!(engine.auto_crossfade_live(), "the blend must go on");
+            assert_eq!(engine.next_track_epoch(), before);
+        }
+        assert!(flac_url(&fx).await.contains("&format=opus&maxBitRate=128&"));
+        Ok(())
+    }
+
+    /// A manual skip's blend is spared by the reset anyway, and the slot
+    /// may hold a prep of the song AFTER its target built under the old
+    /// setting, so a change there still drops the prepared track.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_streaming_quality_change_during_a_skip_blend_still_drops_the_prepared_track()
+    -> Result<()> {
+        let fx = settled_fixture().await?;
+        let _keepalive = {
+            let engine = fx.playback.audio_engine();
+            let mut engine = engine.lock().await;
+            engine.force_live_skip_crossfade_for_test()
+        };
+        let before = epoch(&fx).await;
+
+        load(
+            &fx,
+            &streaming(StreamFormat::Opus, StreamMaxBitrate::Kbps128),
+        )
+        .await;
+
+        let engine = fx.playback.audio_engine();
+        let engine = engine.lock().await;
+        assert_eq!(engine.next_track_epoch(), before + 1);
+        assert_eq!(
+            engine.queue_track_source(),
+            Some("http://example.test/next"),
+            "the skip blend's incoming is still the queue's track"
+        );
+        Ok(())
+    }
+
+    // ── Seeking a transcode by reopening it at an offset ──
+
+    use crate::{
+        audio::decoder::tests::{ClockReply, ClockServer, spawn_clock_server},
+        types::stream_quality::StreamQuality,
+    };
+
+    /// A FLAC queue song, which Opus or MP3 always asks the server to
+    /// transcode (its bitrate is unknown).
+    fn flac_song(id: &str) -> crate::types::song::Song {
+        let mut song = click_song(id);
+        song.suffix = Some("flac".to_owned());
+        song.path = format!("/music/{id}.flac");
+        song.duration = 10;
+        song
+    }
+
+    /// A controller logged in to `server` under `quality`, on a server that
+    /// honours `timeOffset`, its engine on a device-less output, playing
+    /// `flac_song("a")`. Keep the mixer source alive.
+    async fn playing_clock_fixture(
+        server: &ClockServer,
+        quality: StreamQuality,
+    ) -> Result<(ClickFixture, rodio::mixer::MixerSource)> {
+        playing_clock_fixture_with(server, quality, vec![flac_song("a")]).await
+    }
+
+    /// [`playing_clock_fixture`] with `songs` queued, the first one playing.
+    async fn playing_clock_fixture_with(
+        server: &ClockServer,
+        quality: StreamQuality,
+        songs: Vec<crate::types::song::Song>,
+    ) -> Result<(ClickFixture, rodio::mixer::MixerSource)> {
+        let temp = tempfile::tempdir()?;
+        let storage_q =
+            crate::services::state_storage::StateStorage::new(temp.path().join("queue.redb"))?;
+        let storage_s =
+            crate::services::state_storage::StateStorage::new(temp.path().join("settings.redb"))?;
+        let auth = crate::backend::auth::AuthGateway::new()?;
+        auth.resume_session(
+            server.base.clone(),
+            "alice".to_string(),
+            "jwt".to_string(),
+            "u=alice&s=salt&t=token".to_string(),
+        )
+        .await?;
+        let queue = QueueService::new(auth, storage_q, quality)?;
+        let settings = SettingsService::new(storage_s)?;
+        let tm = Arc::new(TaskManager::new());
+        let (playback, _loop_rx, _qc_rx) =
+            PlaybackController::new(queue.clone(), settings, tm.clone()).await?;
+        let mixer = playback
+            .audio_engine()
+            .lock()
+            .await
+            .install_detached_output_for_test();
+        playback
+            .apply_server_extensions(&["formPost".to_owned(), "transcodeOffset".to_owned()])
+            .await;
+        playback.play_songs_from_index(songs, 0).await?;
+        Ok((
+            ClickFixture {
+                _temp: temp,
+                queue,
+                playback,
+                tasks: tm,
+            },
+            mixer,
+        ))
+    }
+
+    const OPUS_128: StreamQuality = StreamQuality {
+        format: StreamFormat::Opus,
+        max_bitrate: StreamMaxBitrate::Kbps128,
+    };
+
+    /// A held seek key repeats ~25 times a second. On a stream that seeks by
+    /// reopening, each repeat would be a new transcode on the server, so the
+    /// seek waits until the key lets go: nothing goes out while it is held,
+    /// the clock shows the target the repeats add up to meanwhile, and one
+    /// reopen at that target follows (at most two requests in all).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_held_relative_seek_settles_into_one_reopen_and_shows_the_pending_target()
+    -> Result<()> {
+        let server = spawn_clock_server(ClockReply::Live).await;
+        let (fx, _mixer) = playing_clock_fixture(&server, OPUS_128).await?;
+        let opened = server.requests().len();
+        let engine = fx.playback.audio_engine();
+
+        let mut landed = Vec::new();
+        for _ in 0..8 {
+            landed.push(fx.playback.seek_relative(0.5).await?);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let while_held = server.requests().len() - opened;
+        let shown = engine.lock().await.position();
+        // Wait for the settle's reopen to reach the server, with a deadline
+        // rather than a fixed grace (a loaded machine runs the tracked task
+        // late), then give a stray second request time to show.
+        let deadline = std::time::Instant::now()
+            + crate::audio::engine::SEEK_SETTLE
+            + std::time::Duration::from_secs(5);
+        while server.requests().len() == opened && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let after: Vec<_> = server.requests().into_iter().skip(opened).collect();
+        let position = engine.lock().await.position();
+        engine.lock().await.stop().await;
+
+        assert_eq!(
+            landed,
+            [500, 1_000, 1_500, 2_000, 2_500, 3_000, 3_500, 4_000],
+            "each repeat adds to the pending target"
+        );
+        assert_eq!(
+            while_held, 0,
+            "nothing goes to the server while the key is held"
+        );
+        assert_eq!(shown, 4_000, "the clock shows the pending target");
+        assert!(after.len() <= 2, "{after:?}");
+        assert_eq!(
+            after.iter().filter(|r| r.time_offset().is_some()).count(),
+            1,
+            "one reopen: {after:?}"
+        );
+        assert_eq!(
+            after.first().and_then(|r| r.time_offset()).as_deref(),
+            Some("4"),
+            "{after:?}"
+        );
+        assert_eq!(position, 4_000);
+        Ok(())
+    }
+
+    /// The Streaming Quality setting changed mid-song applies from the next
+    /// song: a seek that reopens the playing song keeps the params it opened
+    /// with.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mid_song_setting_change_leaves_a_seeks_reopen_on_the_songs_own_params() -> Result<()>
+    {
+        let server = spawn_clock_server(ClockReply::Live).await;
+        let (fx, _mixer) = playing_clock_fixture(&server, OPUS_128).await?;
+        {
+            let engine_arc = fx.playback.audio_engine();
+            let mut engine = engine_arc.lock().await;
+            PlaybackController::push_stream_quality(
+                &fx.queue,
+                &mut engine,
+                StreamQuality {
+                    format: StreamFormat::Mp3,
+                    max_bitrate: StreamMaxBitrate::Kbps192,
+                },
+            )
+            .await;
+        }
+
+        fx.playback.seek(3.0).await?;
+        let reopen = server.requests().last().cloned();
+        fx.playback.audio_engine().lock().await.stop().await;
+
+        let reopen = reopen.expect("a request");
+        assert_eq!(reopen.time_offset().as_deref(), Some("3"), "{reopen:?}");
+        assert_eq!(
+            reopen.param("format").as_deref(),
+            Some("opus"),
+            "{reopen:?}"
+        );
+        assert_eq!(
+            reopen.param("maxBitRate").as_deref(),
+            Some("128"),
+            "{reopen:?}"
+        );
+        Ok(())
+    }
+
+    /// The settle task waits until `SEEK_SETTLE` after the LAST repeat, then
+    /// runs the seek once; a repeat while it waits only moves the deadline.
+    #[tokio::test(start_paused = true)]
+    async fn the_seek_settle_runs_once_after_the_last_repeat() {
+        let engine = Arc::new(Mutex::new(CustomAudioEngine::new()));
+        let started = tokio::time::Instant::now();
+        assert!(engine.lock().await.defer_seek(5_000));
+        let settle = {
+            let engine = engine.clone();
+            tokio::spawn(async move { run_seek_settle(&engine).await })
+        };
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!engine.lock().await.defer_seek(8_000), "a repeat moves it");
+        let outcome = settle.await.expect("the settle task");
+        let elapsed = started.elapsed();
+        let left = engine.lock().await.settling_seek_due();
+
+        assert_eq!(
+            elapsed,
+            std::time::Duration::from_millis(200) + crate::audio::engine::SEEK_SETTLE
+        );
+        assert_eq!(outcome, Some(crate::audio::engine::SeekOutcome::Settled));
+        assert_eq!(left, None, "it ran once");
+    }
+
+    /// A seek past the song's end ends it at once, and the completion then
+    /// loads the next song itself. A gapless prep started meanwhile (the UI
+    /// asks for one as soon as its clock reads past 80 %) only races that
+    /// load: the completion's stop throws it away, after the server already
+    /// started its transcode. So none is started once the track has ended.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_seek_past_the_end_prepares_no_next_track() -> Result<()> {
+        let server = spawn_clock_server(ClockReply::Live).await;
+        let (fx, _mixer) =
+            playing_clock_fixture_with(&server, OPUS_128, vec![flac_song("a"), flac_song("b")])
+                .await?;
+        server.set_reply(ClockReply::PastEndOgg);
+
+        fx.playback.seek(9.6).await?;
+        let prepared = fx.playback.prepare_next_for_gapless().await;
+        server.set_reply(ClockReply::Live);
+        let opens_of_b = || {
+            server
+                .requests()
+                .iter()
+                .filter(|r| r.param("id").as_deref() == Some("b"))
+                .count()
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while opens_of_b() == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let opened = opens_of_b();
+        fx.playback.audio_engine().lock().await.stop().await;
+
+        assert!(!prepared, "no prep once the track has ended");
+        assert_eq!(opened, 1, "the next song opens once, by the completion");
+        Ok(())
     }
 }

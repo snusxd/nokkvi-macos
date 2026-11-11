@@ -28,8 +28,9 @@ use crate::{
             FadeOnSkip, LYRICS_FONT_SIZE_PX_MAX, LYRICS_FONT_SIZE_PX_MIN, LyricsAlignment,
             LyricsBackdropBlur, LyricsMode, LyricsWordHighlight, NormalizationLevel,
             RATING_REMINDER_PERCENT_MAX, RATING_REMINDER_PERCENT_MIN, RatingReminderTrigger,
-            RoundedMode, SCROBBLE_THRESHOLD_PCT_MAX, SCROBBLE_THRESHOLD_PCT_MIN,
-            TRANSPORT_FADE_MS_MAX, TRANSPORT_FADE_MS_MIN, VolumeNormalizationMode,
+            RoundedMode, SCROBBLE_THRESHOLD_PCT_MAX, SCROBBLE_THRESHOLD_PCT_MIN, StreamFormat,
+            StreamMaxBitrate, TRANSPORT_FADE_MS_MAX, TRANSPORT_FADE_MS_MIN,
+            VolumeNormalizationMode,
         },
         settings_data::PlaybackSettingsData,
     },
@@ -547,6 +548,54 @@ define_settings! {
                 read_field: |d| d.rewind_on_previous,
             },
         },
+        // -- Streaming Quality ------------------------------------------------
+        // What a queue song's stream URL asks the server for. The rows only
+        // persist; the push to the stream URL builder rides
+        // `PlayerSettingsLoaded` like the engine settings.
+        StreamFormatKey {
+            key: "general.stream_format",
+            value_type: Enum,
+            setter: |mgr, v: String| mgr.set_stream_format(StreamFormat::from_label(&v)),
+            toml_apply: |ts, p| p.stream_format = ts.stream_format,
+            read: |src, out| out.stream_format = src.stream_format,
+            write: |ps, ts| ts.stream_format = ps.stream_format,
+            ui_meta: {
+                label: "Stream Format",
+                category: "Streaming Quality",
+                subtitle: Some(
+                    "Original streams your files as they are. Opus or MP3 has the server send \
+                     a smaller copy of songs above Max Bitrate, to save data. Smaller copies \
+                     never show BIT-PERFECT. Applies from the next song. MP3 can add a short gap \
+                     between songs that run together.",
+                ),
+                default: "Original",
+                options: StreamFormat::LABELS,
+                read_field: |d| d.stream_format.as_ref(),
+            },
+        },
+        StreamMaxBitrateKey {
+            key: "general.stream_max_bitrate",
+            value_type: Enum,
+            setter: |mgr, v: String| {
+                mgr.set_stream_max_bitrate(StreamMaxBitrate::from_label(&v))
+            },
+            toml_apply: |ts, p| p.stream_max_bitrate = ts.stream_max_bitrate,
+            read: |src, out| out.stream_max_bitrate = src.stream_max_bitrate,
+            write: |ps, ts| ts.stream_max_bitrate = ps.stream_max_bitrate,
+            ui_meta: {
+                label: "Max Bitrate",
+                category: "Streaming Quality",
+                subtitle: Some(
+                    "The size of a smaller copy: lower saves more data, higher sounds closer to \
+                     the original. Songs at or under this rate play as they are, and so do MP3s \
+                     and other already-compressed songs up to a quarter above it. Used only with \
+                     Opus or MP3.",
+                ),
+                default: "128 kbps",
+                options: StreamMaxBitrate::LABELS,
+                read_field: |d| d.stream_max_bitrate.as_ref(),
+            },
+        },
         VolumeNormalization {
             key: "general.volume_normalization",
             value_type: Enum,
@@ -1021,6 +1070,8 @@ mod tests {
             crossfade_offset_secs: 0,
             crossfade_bar_snap: false,
             rewind_on_previous: false,
+            stream_format: "Original".into(),
+            stream_max_bitrate: "128 kbps".into(),
             volume_normalization: "Off".into(),
             normalization_level: "Normal".into(),
             replay_gain_preamp_db: 0,
@@ -1043,14 +1094,16 @@ mod tests {
             love_change_notification_enabled: false,
             rating_reminder_trigger: "On Scrobble".into(),
             rating_reminder_percent: 75,
+            server_player_override: None,
         }
     }
 
-    /// 36 entries get ui_meta: 8 unconditional Playback rows (crossfade
+    /// 38 entries get ui_meta: 8 unconditional Playback rows (crossfade
     /// enable, bit-perfect, crossfade duration, crossfade curve, minimum
     /// track length, keep-gapless-albums, rewind-on-previous, volume
     /// normalization), 5 Lyrics rows (mode, online fetch, cover blur, word
-    /// highlight, alignment), 11 Fading rows (smooth starts, fade-on-pause + its
+    /// highlight, alignment), 2 Streaming Quality rows (format, max
+    /// bitrate), 11 Fading rows (smooth starts, fade-on-pause + its
     /// duration, fade-on-stop + its duration, fade-on-skip + its duration —
     /// the duration rows are emitted here unconditionally but the UI builder
     /// only splices each in when its enable/mode is on — plus
@@ -1069,7 +1122,7 @@ mod tests {
     fn build_playback_tab_settings_items_emits_the_pinned_row_count() {
         let data = default_playback_data();
         let entries = build_playback_tab_settings_items(&data);
-        assert_eq!(entries.len(), 37);
+        assert_eq!(entries.len(), 39);
         for e in &entries {
             assert!(matches!(e, SettingsEntry::Item(_)));
         }
@@ -1713,6 +1766,67 @@ mod tests {
         );
     }
 
+    /// Enum round-trip: the Stream Format row's label lands on
+    /// `stream_format` (default Original: nothing is transcoded unless asked).
+    #[test]
+    fn the_stream_format_row_writes_the_chosen_format() {
+        use crate::types::player_settings::StreamFormat;
+        let (mut mgr, _tmp) = make_test_manager();
+        assert_eq!(
+            mgr.get_player_settings().stream_format,
+            StreamFormat::Original
+        );
+
+        let result = dispatch_playback_tab_setting(
+            "general.stream_format",
+            SettingValue::Enum {
+                val: "Opus".to_string(),
+                options: StreamFormat::LABELS.to_vec(),
+            },
+            &mut mgr,
+        );
+
+        assert!(matches!(
+            result,
+            Some(Ok(
+                crate::types::settings_side_effect::SettingsSideEffect::None
+            ))
+        ));
+        assert_eq!(mgr.get_player_settings().stream_format, StreamFormat::Opus);
+    }
+
+    /// Enum round-trip: the Max Bitrate row's label lands on
+    /// `stream_max_bitrate` (default 128 kbps).
+    #[test]
+    fn the_max_bitrate_row_writes_the_chosen_cap() {
+        use crate::types::player_settings::StreamMaxBitrate;
+        let (mut mgr, _tmp) = make_test_manager();
+        assert_eq!(
+            mgr.get_player_settings().stream_max_bitrate,
+            StreamMaxBitrate::Kbps128
+        );
+
+        let result = dispatch_playback_tab_setting(
+            "general.stream_max_bitrate",
+            SettingValue::Enum {
+                val: "96 kbps".to_string(),
+                options: StreamMaxBitrate::LABELS.to_vec(),
+            },
+            &mut mgr,
+        );
+
+        assert!(matches!(
+            result,
+            Some(Ok(
+                crate::types::settings_side_effect::SettingsSideEffect::None
+            ))
+        ));
+        assert_eq!(
+            mgr.get_player_settings().stream_max_bitrate,
+            StreamMaxBitrate::Kbps96
+        );
+    }
+
     /// Type-mismatch path: feeding `Bool` to a key declared as `Int`
     /// should yield `Some(Err(_))` — proves the macro's per-variant
     /// dispatch arm is rejecting wrong types instead of silently coercing.
@@ -1770,6 +1884,8 @@ mod tests {
         ts.opacity_gradient = false;
         ts.rounded_mode = RoundedMode::On;
         ts.view_columns.queue_show_stars = false;
+        ts.stream_format = crate::types::player_settings::StreamFormat::Mp3;
+        ts.stream_max_bitrate = crate::types::player_settings::StreamMaxBitrate::Kbps256;
 
         let mut p = PersistedPlayerSettings::default();
         apply_toml_playback_tab(&ts, &mut p);
@@ -1790,6 +1906,14 @@ mod tests {
         assert!(!p.opacity_gradient);
         assert_eq!(p.rounded_mode, RoundedMode::On);
         assert!(!p.view_columns.queue_show_stars);
+        assert_eq!(
+            p.stream_format,
+            crate::types::player_settings::StreamFormat::Mp3
+        );
+        assert_eq!(
+            p.stream_max_bitrate,
+            crate::types::player_settings::StreamMaxBitrate::Kbps256
+        );
     }
 
     /// Read-side: `dump_playback_tab_player_settings` mirrors migrated fields
@@ -1812,6 +1936,8 @@ mod tests {
         src.rounded_mode = RoundedMode::On;
         src.view_columns.queue_show_stars = false;
         src.scrobble_threshold = 0.75;
+        src.stream_format = crate::types::player_settings::StreamFormat::Opus;
+        src.stream_max_bitrate = crate::types::player_settings::StreamMaxBitrate::Kbps64;
 
         dump_playback_tab_player_settings(&src, &mut ui);
 
@@ -1832,6 +1958,14 @@ mod tests {
         assert_eq!(ui.rounded_mode, RoundedMode::On);
         assert!(!ui.view_columns.queue_show_stars);
         assert!((ui.scrobble_threshold - 0.75_f32).abs() < f32::EPSILON);
+        assert_eq!(
+            ui.stream_format,
+            crate::types::player_settings::StreamFormat::Opus
+        );
+        assert_eq!(
+            ui.stream_max_bitrate,
+            crate::types::player_settings::StreamMaxBitrate::Kbps64
+        );
     }
 
     /// Write-side: `write_playback_tab_toml` copies the migrated fields
@@ -1863,6 +1997,8 @@ mod tests {
         ps.quick_add_to_playlist = true;
         ps.queue_show_default_playlist = true;
         ps.scrobbling_enabled = false;
+        ps.stream_format = crate::types::player_settings::StreamFormat::Mp3;
+        ps.stream_max_bitrate = crate::types::player_settings::StreamMaxBitrate::Kbps192;
 
         let mut ts = TomlSettings::default();
         write_playback_tab_toml(&ps, &mut ts);
@@ -1893,6 +2029,14 @@ mod tests {
         assert!(ts.quick_add_to_playlist);
         assert!(ts.queue_show_default_playlist);
         assert!(!ts.scrobbling_enabled);
+        assert_eq!(
+            ts.stream_format,
+            crate::types::player_settings::StreamFormat::Mp3
+        );
+        assert_eq!(
+            ts.stream_max_bitrate,
+            crate::types::player_settings::StreamMaxBitrate::Kbps192
+        );
     }
 
     /// Parity guard: every Playback-tab row's `ui_meta.default` must agree with
@@ -1937,6 +2081,8 @@ mod tests {
             crossfade_offset_secs: i64::from(live.crossfade_offset_secs),
             crossfade_bar_snap: live.crossfade_bar_snap,
             rewind_on_previous: live.rewind_on_previous,
+            stream_format: live.stream_format.as_label().into(),
+            stream_max_bitrate: live.stream_max_bitrate.as_label().into(),
             volume_normalization: live.volume_normalization.as_label().into(),
             normalization_level: live.normalization_level.as_label().into(),
             replay_gain_preamp_db: live.replay_gain_preamp_db.round() as i64,
@@ -1961,6 +2107,7 @@ mod tests {
             love_change_notification_enabled: live.love_change_notification_enabled,
             rating_reminder_trigger: live.rating_reminder_trigger.as_label().into(),
             rating_reminder_percent: i64::from(live.rating_reminder_percent),
+            server_player_override: None,
         };
 
         for e in build_playback_tab_settings_items(&data) {

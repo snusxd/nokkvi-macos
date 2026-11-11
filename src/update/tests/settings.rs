@@ -1365,3 +1365,110 @@ fn clean_hot_reload_applies_without_a_toast() {
         crate::app_message::Message::SettingsReloadDataLoaded(..)
     ));
 }
+
+// ============================================================================
+// Streaming Quality: what nokkvi's player row on the server forces
+// ============================================================================
+
+/// The Streaming Quality section's row keys in the Playback tab the app
+/// would show now.
+fn streaming_quality_keys(app: &crate::Nokkvi) -> Vec<String> {
+    let data = app.build_settings_view_data();
+    let entries = crate::views::settings::test_support::playback_entries(&data.playback);
+    let mut keys = Vec::new();
+    let mut inside = false;
+    for entry in &entries {
+        match entry {
+            nokkvi_data::types::setting_item::SettingsEntry::Header { label, .. } => {
+                inside = *label == "Streaming Quality";
+            }
+            nokkvi_data::types::setting_item::SettingsEntry::Item(item) if inside => {
+                keys.push(item.key.to_string());
+            }
+            nokkvi_data::types::setting_item::SettingsEntry::Item(_) => {}
+        }
+    }
+    keys
+}
+
+/// A max bit rate on nokkvi's player row shows a read-only row under
+/// Streaming Quality saying what it does and where to change it.
+#[test]
+fn a_player_row_cap_shows_a_read_only_row_under_streaming_quality() {
+    use nokkvi_data::types::{player_override::PlayerOverride, setting_value::SettingValue};
+    let mut app = test_app();
+
+    let _ = app.handle_player_override_fetched(PlayerOverride::of(None, 96));
+
+    assert_eq!(
+        streaming_quality_keys(&app),
+        [
+            "general.stream_format",
+            "general.stream_max_bitrate",
+            "general.server_player_override"
+        ]
+    );
+    let data = app.build_settings_view_data();
+    let entries = crate::views::settings::test_support::playback_entries(&data.playback);
+    let row = entries
+        .iter()
+        .find_map(|entry| match entry {
+            nokkvi_data::types::setting_item::SettingsEntry::Item(item)
+                if item.key == "general.server_player_override" =>
+            {
+                Some(item.clone())
+            }
+            _ => None,
+        })
+        .expect("the row");
+    assert!(
+        matches!(&row.value, SettingValue::Text(text) if text == "96 kbps limit"),
+        "{:?}",
+        row.value
+    );
+    assert_eq!(
+        row.subtitle.as_deref(),
+        Some(
+            "Your server limits this device to 96 kbps, so songs above that always stream as a \
+             smaller copy. Change it in Navidrome under Settings > Players."
+        )
+    );
+}
+
+/// The player-row read lands after the Playback tab may already be on
+/// screen: the open page shows the row at once, without waiting for
+/// something else to rebuild it.
+#[test]
+fn a_player_row_cap_reaches_an_open_playback_tab_at_once() {
+    use nokkvi_data::types::{player_override::PlayerOverride, setting_item::SettingsEntry};
+    let mut app = test_app();
+    app.current_view = crate::View::Settings;
+    app.settings_page.active_category = crate::views::settings::SettingsTab::Playback;
+    app.refresh_settings_entries_if_dirty();
+    let shows_the_row = |app: &crate::Nokkvi| {
+        app.settings_page.cached_entries.iter().any(|entry| {
+            matches!(entry, SettingsEntry::Item(item) if item.key == "general.server_player_override")
+        })
+    };
+    assert!(!shows_the_row(&app), "precondition: no override, no row");
+
+    let _ = app.handle_player_override_fetched(PlayerOverride::of(None, 96));
+
+    assert!(shows_the_row(&app), "the open tab shows the row");
+}
+
+/// A row that forces nothing (or a read that failed) shows no row.
+#[test]
+fn no_player_row_override_shows_no_row() {
+    let mut app = test_app();
+    let _ = app.handle_player_override_fetched(
+        nokkvi_data::types::player_override::PlayerOverride::of(None, 96),
+    );
+
+    let _ = app.handle_player_override_fetched(None);
+
+    assert_eq!(
+        streaming_quality_keys(&app),
+        ["general.stream_format", "general.stream_max_bitrate"]
+    );
+}

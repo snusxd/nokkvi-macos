@@ -4,7 +4,7 @@
 //! `AlbumsService::fetch_album_artwork` against the bare reqwest client; there
 //! is no client-side cache, so URL form is the only thing that matters here.
 
-use crate::types::song::Song;
+use crate::types::{song::Song, stream_quality::StreamParams};
 
 /// Navidrome cover-art ID kind prefixes — the set `ParseArtworkID` accepts
 /// (`model/artwork_id.go` `artworkKindMap`: mf, ar, al, pl, dc, ra). An ID that
@@ -126,20 +126,69 @@ pub fn build_song_artwork_url(song: &Song, server_url: &str, subsonic_credential
 /// * `song_id` - The song ID
 /// * `server_url` - Base Navidrome server URL
 /// * `subsonic_credential` - Pre-formatted credential string
+/// * `transcode` - The transcode to ask for (`format` + `maxBitRate`), or
+///   `None` for the file as it is
 ///
 /// # Returns
 /// Complete stream URL string, or empty string if credentials are missing
-pub fn build_stream_url(song_id: &str, server_url: &str, subsonic_credential: &str) -> String {
+pub fn build_stream_url(
+    song_id: &str,
+    server_url: &str,
+    subsonic_credential: &str,
+    transcode: Option<StreamParams>,
+) -> String {
     if song_id.is_empty() || subsonic_credential.is_empty() {
         return String::new();
     }
+    // Right after the id, which stays the first param
+    // (`StreamSession::song_id_of` reads it from there). The format and the
+    // cap always travel together, and "raw" is never sent.
+    let transcode = transcode.map_or_else(String::new, |params| {
+        format!(
+            "&format={}&maxBitRate={}",
+            params.format.wire(),
+            params.max_bitrate_kbps
+        )
+    });
 
     let cache_bust = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
 
     let standard = crate::services::api::subsonic::STANDARD_PARAMS;
-    format!("{server_url}/rest/stream?id={song_id}&{subsonic_credential}&{standard}&_={cache_bust}")
+    format!(
+        "{server_url}/rest/stream?id={song_id}{transcode}&{subsonic_credential}&{standard}&_={cache_bust}"
+    )
+}
+
+/// Whether `url` asks the server for a transcode: a `/rest/stream` request
+/// carrying a `format` param, which only [`build_stream_url`] puts there (for
+/// the Streaming Quality setting). The decoder opens such a URL with one GET;
+/// the waveform scan skips the song it plays.
+pub fn requests_transcode(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        url.path().ends_with("/rest/stream") && url.query_pairs().any(|(key, _)| key == "format")
+    })
+}
+
+/// `url` asking the server to start its transcode `offset_secs` whole seconds
+/// into the song (`timeOffset`), replacing any offset it already carries; 0
+/// gives the URL without one. Navidrome reads the param as a whole number (a
+/// fraction or a negative silently means 0), so the type allows nothing else.
+/// The rest of the URL is kept as it is, `id` first included.
+pub fn with_time_offset(url: &str, offset_secs: u64) -> String {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let offset = (offset_secs > 0).then(|| format!("timeOffset={offset_secs}"));
+    let params: Vec<&str> = query
+        .split('&')
+        .filter(|param| !param.is_empty() && param.split('=').next() != Some("timeOffset"))
+        .chain(offset.as_deref())
+        .collect();
+    if params.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", params.join("&"))
+    }
 }
 
 #[cfg(test)]
@@ -331,15 +380,175 @@ mod tests {
     #[test]
     fn stream_url_empty_on_missing_inputs() {
         assert_eq!(
-            build_stream_url("", "http://srv", "u=x"),
+            build_stream_url("", "http://srv", "u=x", None),
             "",
             "empty song_id"
         );
         assert_eq!(
-            build_stream_url("id", "http://srv", ""),
+            build_stream_url("id", "http://srv", "", None),
             "",
             "empty credential"
         );
+    }
+
+    use crate::types::stream_quality::{StreamParams, TranscodeFormat};
+
+    /// The query keys of `url`, in order.
+    fn query_keys(url: &str) -> Vec<String> {
+        url::Url::parse(url)
+            .expect("a URL")
+            .query_pairs()
+            .map(|(key, _)| key.into_owned())
+            .collect()
+    }
+
+    fn query_value(url: &str, key: &str) -> Option<String> {
+        url::Url::parse(url)
+            .expect("a URL")
+            .query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    }
+
+    #[test]
+    fn only_a_stream_request_with_a_format_param_asks_for_a_transcode() {
+        for (url, asks) in [
+            (
+                "http://srv/rest/stream?id=s1&format=opus&maxBitRate=128&u=a&t=b&s=c&f=json",
+                true,
+            ),
+            (
+                "http://srv/rest/stream?id=s1&format=mp3&maxBitRate=96",
+                true,
+            ),
+            ("https://srv/navidrome/rest/stream?id=s1&format=opus", true),
+            ("http://srv/rest/stream?id=s1&u=a&t=b&s=c&f=json&_=1", false),
+            ("http://srv/rest/stream?id=s1&f=json", false),
+            ("http://radio.example/live.mp3?format=mp3", false),
+            ("/home/me/song.flac", false),
+            ("", false),
+        ] {
+            assert_eq!(requests_transcode(url), asks, "{url}");
+        }
+    }
+
+    /// Only a `format` KEY counts: the same text inside another param's
+    /// encoded value (a title, a path) is not a request for a transcode.
+    #[test]
+    fn a_format_hidden_inside_an_encoded_value_is_no_transcode_request() {
+        for url in [
+            "http://srv/rest/stream?id=s1&title=a%26format%3Dopus&u=a",
+            "http://srv/rest/stream?id=s1%26format%3Dmp3&u=a",
+            "http://srv/rest/stream?id=s1&xformat=opus",
+            "http://srv/rest/stream?id=s1&u=a#format=opus",
+        ] {
+            assert!(!requests_transcode(url), "{url}");
+        }
+        assert!(requests_transcode(
+            "http://srv/rest/stream?id=s1&title=a%26b&format=opus&maxBitRate=128"
+        ));
+    }
+
+    #[test]
+    fn a_stream_url_without_a_transcode_asks_for_the_file_as_before() {
+        let url = build_stream_url("s1", "http://srv", "u=x&t=tok&s=salt", None);
+        assert!(
+            url.starts_with("http://srv/rest/stream?id=s1&u=x&t=tok&s=salt&f=json"),
+            "{url}"
+        );
+        let keys = query_keys(&url);
+        assert!(!keys.iter().any(|k| k == "format"), "{url}");
+        assert!(!keys.iter().any(|k| k == "maxBitRate"), "{url}");
+    }
+
+    #[test]
+    fn a_transcode_rides_after_the_id_with_its_format_and_cap_together() {
+        for (format, wire) in [
+            (TranscodeFormat::Opus, "opus"),
+            (TranscodeFormat::Mp3, "mp3"),
+        ] {
+            for kbps in [64, 128, 320] {
+                let url = build_stream_url(
+                    "s1",
+                    "http://srv",
+                    "u=x&t=tok&s=salt",
+                    Some(StreamParams {
+                        format,
+                        max_bitrate_kbps: kbps,
+                    }),
+                );
+                let keys = query_keys(&url);
+                assert_eq!(keys.first().map(String::as_str), Some("id"), "{url}");
+                assert_eq!(
+                    crate::services::playback::StreamSession::song_id_of(&url),
+                    Some("s1"),
+                    "{url}"
+                );
+                assert_eq!(query_value(&url, "format").as_deref(), Some(wire), "{url}");
+                assert_eq!(
+                    query_value(&url, "maxBitRate"),
+                    Some(kbps.to_string()),
+                    "{url}"
+                );
+                assert_eq!(keys.iter().filter(|k| *k == "format").count(), 1, "{url}");
+                assert!(!url.contains("format=raw"), "{url}");
+                assert!(!url.contains("estimateContentLength"), "{url}");
+            }
+        }
+    }
+
+    /// `timeOffset` is always a whole, non-negative number of seconds (the
+    /// server reads anything else as 0), it replaces an offset the URL
+    /// already carries instead of adding a second one, and 0 asks for the
+    /// stream from the start, with no param at all. The id stays first.
+    #[test]
+    fn a_time_offset_is_always_a_whole_non_negative_number() {
+        let base = build_stream_url(
+            "s1",
+            "http://srv",
+            "u=x&t=tok&s=salt",
+            Some(StreamParams {
+                format: TranscodeFormat::Opus,
+                max_bitrate_kbps: 128,
+            }),
+        );
+
+        let at_seven = with_time_offset(&base, 7);
+        assert_eq!(
+            query_value(&at_seven, "timeOffset").as_deref(),
+            Some("7"),
+            "{at_seven}"
+        );
+        assert_eq!(
+            query_keys(&at_seven).first().map(String::as_str),
+            Some("id")
+        );
+        assert_eq!(query_value(&at_seven, "format").as_deref(), Some("opus"));
+        assert!(requests_transcode(&at_seven));
+
+        let moved = with_time_offset(&at_seven, 240);
+        let keys = query_keys(&moved);
+        assert_eq!(
+            keys.iter().filter(|k| *k == "timeOffset").count(),
+            1,
+            "{moved}"
+        );
+        assert_eq!(query_value(&moved, "timeOffset").as_deref(), Some("240"));
+
+        assert_eq!(
+            with_time_offset(&moved, 0),
+            base,
+            "0 is the stream from the start"
+        );
+        assert_eq!(with_time_offset(&base, 0), base);
+        for offset in [1_u64, 59, 3_599, 86_399] {
+            let value = query_value(&with_time_offset(&base, offset), "timeOffset")
+                .expect("an offset param");
+            assert!(
+                value.chars().all(|c| c.is_ascii_digit()),
+                "a whole, unsigned number: {value}"
+            );
+        }
     }
 
     // ── Per-Song Artwork URL Invariants ──

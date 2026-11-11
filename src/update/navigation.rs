@@ -630,7 +630,9 @@ impl Nokkvi {
                 // (current_view is already View::Settings here, so the
                 // refresh gate passes).
                 self.refresh_settings_entries_if_dirty();
-                Task::none()
+                // The server's player row may have changed since login (the
+                // web UI's Players settings): read it again, once per open.
+                self.fetch_player_override_task()
             }
             // Data already loaded (the editor's buffer by its enter flow) —
             // re-prefetch artwork for the current slot_count in case the
@@ -925,9 +927,18 @@ impl Nokkvi {
                         |shell| async move { shell.auth().fetch_server_version().await.ok() },
                         Message::ServerVersionFetched,
                     ),
+                    // What nokkvi's player row on the server forces, for the
+                    // read-only Streaming Quality row (asked again whenever
+                    // Settings opens).
+                    self.fetch_player_override_task(),
                     self.shell_task(
                         |shell| async move {
                             let names = shell.auth().fetch_open_subsonic_extensions().await.ok();
+                            // The engine learns `transcodeOffset` here; a
+                            // failed probe leaves it off (no offset seeks).
+                            if let Some(names) = &names {
+                                shell.playback().apply_server_extensions(names).await;
+                            }
                             (names, shell.auth().sends_api_key().await)
                         },
                         |(names, sends_api_key)| extensions_fetched_message(names, sends_api_key),

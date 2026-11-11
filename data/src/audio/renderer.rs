@@ -188,6 +188,19 @@ pub(crate) enum CrossfadeTick {
     IncomingStalled,
 }
 
+/// A blend the renderer finalized ahead of the engine: the incoming stream
+/// is the primary now, while its decoder still feeds it through the
+/// crossfade decode loop until the engine's finalize takes it over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FinalizedBlend {
+    /// How long the incoming had played at the finalize (ms, the fade's
+    /// pause-corrected elapsed time).
+    elapsed_ms: u64,
+    /// The promoted stream's own clock at the finalize (ms consumed), so the
+    /// time it plays on until the engine takes over is counted too.
+    stream_ms_at_finalize: u64,
+}
+
 /// Pure crossfade-progress accessor — single source of truth shared by
 /// `tick_crossfade`, `finalize_crossfade`, and the `cancel_crossfade` log so
 /// the three readers can never drift. Subtracts paused time from wall-clock
@@ -489,12 +502,15 @@ pub struct AudioRenderer {
     /// [`Self::set_crossfade_curve`]). `start_crossfade` captures it into the
     /// `Active` variant; an in-flight fade keeps its captured curve.
     crossfade_curve: CrossfadeCurve,
-    /// Elapsed crossfade time (ms) staged after `finalize_crossfade` so the
-    /// engine can read it on the next render tick as a position offset
-    /// (`None` when nothing is staged — 0 ms is a real value). Lives outside
-    /// `CrossfadeState` because it survives the Active→Idle transition by
-    /// exactly one tick; `crossfade_played_ms` reports it in that gap.
-    crossfade_finalized_elapsed_ms: Option<u64>,
+    /// A blend this renderer finalized whose engine half has not taken over
+    /// yet ([`FinalizedBlend`]): staged by `finalize_crossfade`, taken by the
+    /// engine's finalize (`take_crossfade_elapsed_ms`). Lives outside
+    /// `CrossfadeState` because it outlives the Active→Idle transition, by a
+    /// task hop, or for as long as something else holds the engine lock.
+    /// `crossfade_played_ms` reports from it in that gap, and the incoming's
+    /// decode loop, which the engine has not taken over yet, writes into the
+    /// promoted stream through it.
+    crossfade_finalized: Option<FinalizedBlend>,
     /// M8 negative "Gap / Overlap Trim": how much EARLIER (ms) the Armed
     /// position trigger fires than `track_dur − fade` — the blend starts
     /// early and `try_finalize_crossfade` discards the outgoing's last
@@ -561,6 +577,11 @@ pub struct AudioRenderer {
     /// primary — and cleared by `stop()` so it can never leak past a
     /// teardown into an unrelated later play.
     pending_switch_fade_in: bool,
+    /// How many signals this renderer has dispatched to the engine (each
+    /// a task queued on the engine lock: [`Self::on_renderer_finished`] and
+    /// the stall recovery). A seek that reopened its stream compares it to
+    /// tell whether one may still be waiting for the engine lock.
+    engine_signals_sent: u64,
     /// Count of REAL transport-fade completions (ramp reached 1.0 and its
     /// end-state action applied — never cancels, never stale discards).
     /// Test observability only: the engine's stop-ordering test asserts the
@@ -820,7 +841,7 @@ impl AudioRenderer {
             rebuffer: RebufferLatch::default(),
             crossfade_state: CrossfadeState::Idle,
             crossfade_curve: CrossfadeCurve::default(),
-            crossfade_finalized_elapsed_ms: None,
+            crossfade_finalized: None,
             crossfade_lead_ms: 0,
             skip_silence: false,
             trailing_silence_ticks: 0,
@@ -832,6 +853,7 @@ impl AudioRenderer {
             fade_pause_ms: u64::from(crate::types::player_settings::TRANSPORT_FADE_MS_DEFAULT),
             smooth_track_starts: true,
             pending_switch_fade_in: false,
+            engine_signals_sent: 0,
             #[cfg(test)]
             transport_fade_completions: 0,
             #[cfg(test)]
@@ -1282,6 +1304,24 @@ impl AudioRenderer {
                 *paused_at = Some(std::time::Instant::now());
             }
         }
+    }
+
+    /// [`Self::seek`] into a stream of `format`: a seek that opened the track
+    /// again can get another format back (the song's own file where a
+    /// transcode played), so the stream is rebuilt at it, the output first
+    /// moved to its rate (bit-perfect), as a fresh `init` would.
+    pub fn seek_into(&mut self, position_ms: u64, format: &AudioFormat) -> Result<()> {
+        if *format != self.format {
+            // The old stream's ring lives on the old mixer, which a rate
+            // change can drop: stop it first, as `init` does.
+            if let Some(old_stream) = self.primary_stream.take() {
+                old_stream.silence_and_stop();
+            }
+            self.format = format.clone();
+            self.ensure_music_output(format.sample_rate())?;
+        }
+        self.seek(position_ms);
+        Ok(())
     }
 
     /// Seek to position (milliseconds).
@@ -1832,6 +1872,12 @@ impl AudioRenderer {
         }
     }
 
+    /// How many signals this renderer has dispatched to the engine (see the
+    /// `engine_signals_sent` field).
+    pub fn engine_signals_sent(&self) -> u64 {
+        self.engine_signals_sent
+    }
+
     /// Start a crossfade transition.
     /// Creates a new stream for the incoming track and begins volume ramping.
     pub fn start_crossfade(&mut self, duration_ms: u64, incoming_format: &AudioFormat) {
@@ -1882,6 +1928,10 @@ impl AudioRenderer {
         // Belt-and-braces: the constructor already seeded both the atomic and
         // the smoother from `initial_fade = 0.0`, so they cannot disagree.
         cf_stream.set_fade_coeff(0.0);
+        // The incoming writes are this blend's from here: an earlier blend
+        // the engine cancelled after this renderer finalized it leaves its
+        // record behind.
+        self.crossfade_finalized = None;
 
         self.crossfade_state = CrossfadeState::Active {
             stream: cf_stream,
@@ -1990,19 +2040,44 @@ impl AudioRenderer {
             self.primary_stream.as_ref().is_some_and(|s| s.bit_perfect);
     }
 
-    /// Write decoded f32 samples to the crossfade (incoming) stream.
+    /// Write decoded f32 samples to the blend's incoming stream: its own
+    /// while the blend runs, the primary once this renderer finalized the
+    /// blend (the incoming IS the primary then) until the engine's finalize
+    /// takes the decoder over. Dropped otherwise (the blend was cancelled).
     pub fn write_crossfade_samples(&mut self, samples: &[f32]) -> usize {
         if let CrossfadeState::Active { stream, .. } = &mut self.crossfade_state {
             stream.write_samples(samples)
+        } else if self.incoming_promoted() {
+            self.write_samples(samples)
         } else {
             0
         }
     }
 
+    /// How many samples (interleaved) the blend's incoming has queued, for
+    /// its decode loop's backpressure: in its own ring while the blend runs,
+    /// in the primary's once it was promoted ([`Self::write_crossfade_samples`]).
+    /// Read as 0 there, the decode loop read the whole incoming stream at
+    /// once into nothing while something held the engine lock.
+    pub fn incoming_buffer_count(&self) -> usize {
+        if self.incoming_promoted() {
+            self.buffer_count()
+        } else {
+            self.crossfade_buffer_count()
+        }
+    }
+
+    /// Whether this renderer finalized a blend whose engine half has not
+    /// taken over yet: the primary stream is its incoming.
+    fn incoming_promoted(&self) -> bool {
+        !self.is_crossfade_active() && self.crossfade_finalized.is_some()
+    }
+
     /// How long the crossfade's incoming stream has played (ms,
-    /// pause-corrected): live while Active, then frozen at the renderer's own
-    /// finalize until the engine's finalize takes it (the render thread
-    /// promotes its half first). `None` when neither applies. Mid skip blend
+    /// pause-corrected): live while Active, then, once the renderer's own
+    /// finalize promoted it ahead of the engine's (the render thread
+    /// finalizes its half first), the fade's length plus what the promoted
+    /// stream played since. `None` when neither applies. Mid skip blend
     /// this is the skip target's position — the same value the engine hands
     /// the promoted track, so the clock the UI reads does not jump.
     pub(crate) fn crossfade_played_ms(&self) -> Option<u64> {
@@ -2014,7 +2089,13 @@ impl AudioRenderer {
                 ..
             } => Some(fade_played_ms(*started_at, *paused_accum, *paused_at)),
             CrossfadeState::Idle | CrossfadeState::Armed { .. } => {
-                self.crossfade_finalized_elapsed_ms
+                self.crossfade_finalized.map(|blend| {
+                    let stream_ms = self
+                        .primary_stream
+                        .as_ref()
+                        .map_or(0, |stream| stream.position_ms());
+                    blend.elapsed_ms + stream_ms.saturating_sub(blend.stream_ms_at_finalize)
+                })
             }
         }
     }
@@ -2222,13 +2303,25 @@ impl AudioRenderer {
         self.pending_replay_gain = self.current_replay_gain.clone();
 
         // Store for engine to read as position offset
-        self.crossfade_finalized_elapsed_ms = Some(elapsed_ms);
+        let stream_ms_at_finalize = self
+            .primary_stream
+            .as_ref()
+            .map_or(0, |stream| stream.position_ms());
+        self.crossfade_finalized = Some(FinalizedBlend {
+            elapsed_ms,
+            stream_ms_at_finalize,
+        });
         elapsed_ms
     }
 
-    /// Consume the stored crossfade elapsed time.
+    /// Hand the engine's finalize the promoted track's position: how long
+    /// its incoming has played ([`Self::crossfade_played_ms`], which counts
+    /// the time it played on after this renderer's finalize, however long
+    /// the engine took to get there). Its incoming writes go nowhere after.
     pub fn take_crossfade_elapsed_ms(&mut self) -> u64 {
-        self.crossfade_finalized_elapsed_ms.take().unwrap_or(0)
+        let played_ms = self.crossfade_played_ms().unwrap_or(0);
+        self.crossfade_finalized = None;
+        played_ms
     }
 
     /// Check if crossfade is armed.
@@ -2877,6 +2970,15 @@ impl AudioRenderer {
         source
     }
 
+    /// Test-only: lose the device-less output again (it stays detached, so
+    /// nothing opens a real one): the next `init` that builds a stream fails,
+    /// as it does when the audio device can't be opened.
+    #[cfg(test)]
+    pub(crate) fn drop_output_for_test(&mut self) {
+        self.output = None;
+        self.detached_output = true;
+    }
+
     /// Test-only: the normalization gain the primary stream applies to the
     /// samples being written now.
     #[cfg(test)]
@@ -3147,7 +3249,8 @@ impl AudioRenderer {
     /// Uses `tokio::spawn` instead of `std::thread::spawn` + `block_on` to
     /// avoid deadlocking when the engine lock is already held in the same
     /// call chain (e.g. render_tick → finalize → engine lock).
-    fn on_renderer_finished(&self) {
+    fn on_renderer_finished(&mut self) {
+        self.engine_signals_sent += 1;
         let generation = self.source_generation.current();
         trace!("🏁 [RENDERER] Track finished (generation={})", generation);
 
@@ -3187,6 +3290,7 @@ impl AudioRenderer {
             return;
         }
         self.stall_recovery_signalled = true;
+        self.engine_signals_sent += 1;
         #[cfg(test)]
         {
             self.stall_signals_sent += 1;

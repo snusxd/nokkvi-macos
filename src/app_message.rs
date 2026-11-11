@@ -166,11 +166,17 @@ pub struct PlaybackStateUpdate {
     pub bitrate: u32,
     /// Whether the engine can seek the item it plays
     /// (`CustomAudioEngine::seekable`): false for a station and for a song
-    /// the server transcodes on the fly.
+    /// the server transcodes on the fly that the engine can't reopen at an
+    /// offset (one nokkvi did not ask for, or a server without
+    /// `transcodeOffset`).
     pub seekable: bool,
     /// Whether the playing song is the server's live transcode
     /// (`CustomAudioEngine::is_live_transcode`): lossy whatever the file is.
     pub live_transcode: bool,
+    /// Whether the queue song's stream is its own file, a transcode, or
+    /// can't be told (`StreamOrigin::of`); only the file can show BIT-PERFECT.
+    /// `Unknown` for a radio tick.
+    pub stream_origin: crate::state::StreamOrigin,
     /// Live ICY-metadata parsed by IcyMetadataReader
     pub live_icy_metadata: Option<String>,
     /// Tagged BPM of the current song, if the file/server reports one.
@@ -188,6 +194,18 @@ pub struct PlaybackStateUpdate {
     /// prepared next track is thrown away, which reopens the UI's gapless
     /// prep latch.
     pub next_track_epoch: u64,
+    /// Why a seek that reopened the stream failed since the last tick
+    /// (`CustomAudioEngine::take_seek_failure`); the old stream played on.
+    /// Shown once as a warning.
+    pub seek_failure: Option<nokkvi_data::audio::engine::SeekFailure>,
+    /// The stream that plays: codec, live bitrate, delivery, how a seek
+    /// moves, whether nokkvi asked for the transcode (`origin` is left at
+    /// its default: `stream_origin` above carries it).
+    pub stream_status: crate::state::StreamStatus,
+    /// A requested transcode's stream dropped and could not be resumed
+    /// since the last tick (`CustomAudioEngine::take_stream_lost`): its song
+    /// ended early. Shown once as a warning.
+    pub stream_lost: bool,
 }
 
 /// Async lyrics-resolve pipeline messages, carried by `Message::LyricsLoader`.
@@ -1641,6 +1659,10 @@ pub enum Message {
     ResumeSession,
     /// Response from pinging the server to fetch its native application version
     ServerVersionFetched(Option<String>),
+    /// What nokkvi's own player row on the server forces on its streams
+    /// (`AppService::server_player_override`); `None` when it forces
+    /// nothing, or the read failed (the Settings row then stays hidden).
+    PlayerOverrideFetched(Option<nokkvi_data::types::player_override::PlayerOverride>),
     /// Response from probing the server's advertised OpenSubsonic extensions
     /// (`getOpenSubsonicExtensions`); `None` when the probe failed —
     /// extension-gated features stay hidden (fail-safe).
