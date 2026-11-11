@@ -1204,7 +1204,7 @@ pub(crate) fn menu_button<'a, Message: Clone + 'a>(
                     color: Some(theme::fg1()),
                 }),
             text(label.to_string())
-                .size(MENU_TEXT_SIZE)
+                .size(crate::theme::fs(MENU_TEXT_SIZE))
                 .font(theme::ui_font())
                 .color(theme::fg0()),
         ]
@@ -1213,7 +1213,7 @@ pub(crate) fn menu_button<'a, Message: Clone + 'a>(
         .boxed()
     } else {
         text(label.to_string())
-            .size(MENU_TEXT_SIZE)
+            .size(crate::theme::fs(MENU_TEXT_SIZE))
             .font(theme::ui_font())
             .color(theme::fg0())
             .boxed()

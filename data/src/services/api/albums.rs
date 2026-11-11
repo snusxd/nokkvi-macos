@@ -172,6 +172,11 @@ impl AlbumsApiService {
             params.push(("name", query));
         }
 
+        // Filter to starred albums only when Favorited sort is selected
+        if sort_param == "starred_at" {
+            params.push(("starred", "true"));
+        }
+
         for s in library_id_strings {
             params.push(("library_id", s.as_str()));
         }
@@ -277,5 +282,13 @@ mod tests {
             AlbumsApiService::build_album_params("name", "ASC", &r, None, Some(&filter), &[]);
         assert!(params.contains(&("genre_id", "g-1")));
         assert!(!params.iter().any(|(_, v)| *v == "Trip-Hop"));
+    }
+
+    #[test]
+    fn starred_at_sort_filters_to_starred_albums() {
+        let r = range("0", "36");
+        let params =
+            AlbumsApiService::build_album_params("starred_at", "DESC", &r, None, None, &[]);
+        assert!(params.contains(&("starred", "true")));
     }
 }

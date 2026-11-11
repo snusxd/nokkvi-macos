@@ -133,7 +133,7 @@ pub(crate) fn bit_perfect_badge_widget<'a, M: 'a>(
 ) -> Option<Element<'a, M>> {
     let (label, color) = bit_perfect_badge(status, holder)?;
     let badge = text(label)
-        .size(10.0)
+        .size(crate::theme::fs(10.0).0)
         .font(theme::weighted_ui_font(Weight::Bold))
         .color(color_for(color))
         .wrapping(text::Wrapping::None);
@@ -144,7 +144,12 @@ pub(crate) fn bit_perfect_badge_widget<'a, M: 'a>(
         Some(tip) => Some(
             tooltip(
                 badge,
-                container(text(tip).size(11.0).font(theme::ui_font())).padding(4),
+                container(
+                    text(tip)
+                        .size(crate::theme::fs(11.0))
+                        .font(theme::ui_font()),
+                )
+                .padding(4),
                 tooltip::Position::Top,
             )
             .gap(4)
@@ -211,7 +216,7 @@ where
 
     row_in = row_in.push(
         text(radio_name.to_string())
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .font(theme::weighted_ui_font(Weight::Bold))
             .color(strip_text(theme::fg2()))
             .boxed(),
@@ -266,7 +271,7 @@ pub(crate) fn info_field_widget<'a, M: 'static>(
     value_color: iced::Color,
 ) -> Element<'a, M> {
     let label_widget = text(label)
-        .size(10.0)
+        .size(crate::theme::fs(10.0).0)
         .font(theme::weighted_ui_font(Weight::Medium))
         .color(theme::fg4())
         .wrapping(text::Wrapping::None);
@@ -278,7 +283,7 @@ pub(crate) fn info_field_widget<'a, M: 'static>(
     row![
         label_widget,
         super::marquee_text::marquee_text(value)
-            .size(10.0)
+            .size(crate::theme::fs(10.0).0)
             .font(theme::ui_font())
             .color(value_color),
     ]
@@ -397,7 +402,7 @@ pub(crate) fn track_info_strip<'a, M: Clone + 'static>(
     if let Some((ref left, _)) = format_split {
         info_row = info_row.push(
             text(left.clone())
-                .size(10.0)
+                .size(crate::theme::fs(10.0).0)
                 .font(theme::weighted_ui_font(Weight::Medium))
                 .color(strip_text(theme::fg3()))
                 .wrapping(text::Wrapping::None)
@@ -440,7 +445,7 @@ pub(crate) fn track_info_strip<'a, M: Clone + 'static>(
             center_row = center_row.push(
                 iced::widget::row![
                     super::marquee_text::marquee_text(merged)
-                        .size(10.0)
+                        .size(crate::theme::fs(10.0).0)
                         .font(theme::ui_font())
                         .color(strip_text(theme::fg2())),
                 ]
@@ -512,7 +517,7 @@ pub(crate) fn track_info_strip<'a, M: Clone + 'static>(
     if let Some((_, Some(ref right))) = format_split {
         info_row = info_row.push(
             text(right.clone())
-                .size(10.0)
+                .size(crate::theme::fs(10.0).0)
                 .font(theme::weighted_ui_font(Weight::Medium))
                 .color(strip_text(theme::fg3()))
                 .wrapping(text::Wrapping::None)
@@ -555,7 +560,7 @@ fn build_merged_centered_strip<'a, M: Clone + 'static>(
 
     let format_text = |s: String| {
         text(s)
-            .size(10.0)
+            .size(crate::theme::fs(10.0).0)
             .font(theme::weighted_ui_font(Weight::Medium))
             .color(strip_text(theme::fg3()))
             .wrapping(text::Wrapping::None)
@@ -563,7 +568,7 @@ fn build_merged_centered_strip<'a, M: Clone + 'static>(
 
     let marquee = iced::widget::row![
         super::marquee_text::marquee_text(merged)
-            .size(10.0)
+            .size(crate::theme::fs(10.0).0)
             .font(theme::ui_font())
             .color(strip_text(theme::fg2()))
             .align_x(iced::alignment::Horizontal::Center),

@@ -197,7 +197,7 @@ pub(crate) fn info_modal_overlay<'a>(
 
     // ── Header: [Title  Type  ·····  📋  X] ─────────────────────
     let title_text = text(item.title())
-        .size(TITLE_SIZE)
+        .size(crate::theme::fs(TITLE_SIZE))
         .font(theme::ui_font())
         .color(theme::fg0());
 
@@ -208,7 +208,7 @@ pub(crate) fn info_modal_overlay<'a>(
         InfoModalItem::Playlist { .. } => "Playlist",
     };
     let type_badge = text(type_label)
-        .size(11)
+        .size(crate::theme::fs(11))
         .font(theme::ui_font())
         .color(theme::fg4());
 
@@ -277,7 +277,7 @@ pub(crate) fn info_modal_overlay<'a>(
         // Plain label cell — same for all rows
         let label_cell = container(
             text(label.as_str())
-                .size(LABEL_SIZE)
+                .size(crate::theme::fs(LABEL_SIZE))
                 .font(theme::ui_font())
                 .color(theme::fg4()),
         )
@@ -306,7 +306,7 @@ pub(crate) fn info_modal_overlay<'a>(
             };
             container(
                 text(glyph_text)
-                    .size(VALUE_SIZE + 2.0)
+                    .size(crate::theme::fs(VALUE_SIZE + 2.0))
                     .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                     .color(glyph_color),
             )
@@ -322,7 +322,7 @@ pub(crate) fn info_modal_overlay<'a>(
             let url_copy = url.clone();
             button(
                 text(url)
-                    .size(VALUE_SIZE)
+                    .size(crate::theme::fs(VALUE_SIZE))
                     .font(theme::ui_font())
                     .color(theme::accent_bright()),
             )
@@ -371,7 +371,7 @@ pub(crate) fn info_modal_overlay<'a>(
                     } else {
                         "Show more"
                     })
-                    .size(11)
+                    .size(crate::theme::fs(11))
                     .font(theme::ui_font())
                     .color(theme::accent_bright()),
                 ]
@@ -394,7 +394,7 @@ pub(crate) fn info_modal_overlay<'a>(
             // Value cell editor (defined before value_cell branch to avoid borrow issues)
             let editor = text_editor(content)
                 .on_action(move |action| InfoModalMessage::EditorAction(idx, action))
-                .size(VALUE_SIZE)
+                .size(crate::theme::fs(VALUE_SIZE))
                 .font(theme::ui_font())
                 .height(Length::Shrink)
                 .padding(iced::Padding {
@@ -423,7 +423,7 @@ pub(crate) fn info_modal_overlay<'a>(
         } else {
             let editor = text_editor(content)
                 .on_action(move |action| InfoModalMessage::EditorAction(idx, action))
-                .size(VALUE_SIZE)
+                .size(crate::theme::fs(VALUE_SIZE))
                 .font(theme::ui_font())
                 .height(Length::Shrink)
                 .padding(iced::Padding {

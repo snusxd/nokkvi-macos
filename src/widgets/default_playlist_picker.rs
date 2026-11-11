@@ -242,7 +242,7 @@ fn render_picker_slot<'a>(
     };
 
     let title = text(entry.label().to_string())
-        .size(14.0)
+        .size(crate::theme::fs(14.0))
         .font(theme::weighted_ui_font(weight))
         .color(label_color)
         .wrapping(iced::widget::text::Wrapping::None);
@@ -260,7 +260,7 @@ fn render_picker_slot<'a>(
         }
     };
     let subtitle = text(subtitle_str)
-        .size(11.0)
+        .size(crate::theme::fs(11.0))
         .font(theme::ui_font())
         .color(subtitle_color)
         .wrapping(iced::widget::text::Wrapping::None);

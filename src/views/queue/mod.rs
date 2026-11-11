@@ -229,6 +229,9 @@ pub struct QueueViewData<'a> {
     /// already driven by the per-frame tick. `pub(crate)` because
     /// `OverCoverBoat` wraps the crate-private `BoatState`.
     pub(crate) over_art_boat: Option<crate::widgets::base_slot_list_layout::OverCoverBoat<'a>>,
+    /// The Cover Beat visualizer's swell (`Nokkvi::cover_beat_scale`), drawn
+    /// only while the panel shows the playing track's cover.
+    pub cover_beat_scale: f32,
     /// Synced-lyrics layer for the now-playing cover. `Some` only when the
     /// layer is wanted for the playing song (`Nokkvi::lyrics_layer_wanted`)
     /// and queue playback is active. The over-cover visualizer

@@ -228,6 +228,7 @@ fn policy_table_is_pinned() {
         A::SwitchToSettings,
         A::FocusSearch,
         A::ToggleBrowsingPanel,
+        A::ToggleNowPlayingSidebar,
         A::CenterOnPlaying,
         A::OpenTrawl,
         A::Roulette,
@@ -503,10 +504,11 @@ fn stopped_queue_shows_sharp_cursor_cover_without_blur() {
         Some(sharp_id)
     );
 
-    // Playing: the lyrics layer shows, so the frost takes over.
+    // Playing: the lyrics layer shows, but it has its own column beside the
+    // cover now, so the cover stays sharp (no frost behind the text).
     app.playback.playing = true;
     assert!(app.queue_lyrics_panel_data().is_some());
-    assert_ne!(
+    assert_eq!(
         app.theater_now_playing_cover().map(Handle::id),
         Some(sharp_id)
     );
@@ -1204,5 +1206,243 @@ mod r2 {
             Mode::Fullscreen,
         )));
         assert_eq!(app.theater.prior_window_mode, Some(Mode::Windowed));
+    }
+}
+
+mod reveal_animation {
+    use std::time::{Duration, Instant};
+
+    use iced::{Point, Rectangle, Size};
+
+    use super::*;
+    use crate::{
+        app_message::TheaterMessage,
+        state::{Reveal, RevealKind},
+        update::theater::{
+            REVEAL_DURATION, ease_in_out_cubic, lerp_rect, reveal_fill, rising_rect,
+            theater_geometry, tick,
+        },
+    };
+
+    const WINDOW: Size = Size::new(1000.0, 800.0);
+
+    fn cover() -> Rectangle {
+        Rectangle::new(Point::new(600.0, 40.0), Size::new(380.0, 380.0))
+    }
+
+    #[test]
+    fn the_curve_starts_and_stops_gently_and_is_symmetric() {
+        assert_eq!(ease_in_out_cubic(0.0), 0.0);
+        assert_eq!(ease_in_out_cubic(1.0), 1.0);
+        assert!((ease_in_out_cubic(0.5) - 0.5).abs() < 1e-6);
+        assert!(ease_in_out_cubic(0.1) < 0.1);
+        for t in [0.1_f32, 0.3, 0.45] {
+            assert!((ease_in_out_cubic(t) + ease_in_out_cubic(1.0 - t) - 1.0).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn lerp_rect_runs_between_its_ends() {
+        let window = Rectangle::new(Point::ORIGIN, WINDOW);
+        assert_eq!(lerp_rect(cover(), window, 0.0), cover());
+        assert_eq!(lerp_rect(cover(), window, 1.0), window);
+    }
+
+    #[test]
+    fn with_no_sidebar_cover_the_layout_rises_from_below_at_full_size() {
+        let rest = rising_rect(WINDOW, 0.0);
+        assert_eq!((rest.y, rest.width, rest.height), (800.0, 1000.0, 800.0));
+        let half = rising_rect(WINDOW, 0.5);
+        assert_eq!((half.y, half.width, half.height), (400.0, 1000.0, 800.0));
+        assert_eq!(
+            rising_rect(WINDOW, 1.0),
+            Rectangle::new(Point::ORIGIN, WINDOW)
+        );
+    }
+
+    #[test]
+    fn the_cover_sits_left_with_the_lyrics_to_its_right() {
+        let g = theater_geometry(WINDOW, true);
+        let lyrics = g.lyrics.expect("a wide window has room for the lyrics");
+        assert_eq!(g.cover.width, g.cover.height, "the cover is square");
+        assert!(g.cover.x < lyrics.x);
+        assert!(g.cover.x + g.cover.width <= lyrics.x);
+        assert!(lyrics.x + lyrics.width <= WINDOW.width);
+        assert!(g.cover.y >= 0.0 && g.cover.y + g.cover.height <= WINDOW.height);
+    }
+
+    #[test]
+    fn without_lyrics_the_cover_is_centered_alone() {
+        let g = theater_geometry(WINDOW, false);
+        assert!(g.lyrics.is_none());
+        let center_x = g.cover.x + g.cover.width / 2.0;
+        assert!((center_x - WINDOW.width / 2.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn a_window_too_narrow_for_the_lyrics_shows_the_cover_alone() {
+        let g = theater_geometry(Size::new(420.0, 800.0), true);
+        assert!(g.lyrics.is_none());
+    }
+
+    #[test]
+    fn an_entry_waits_for_the_covers_bounds_and_then_runs() {
+        let mut app = home_app();
+        let _ = app.enter_theater();
+        let pending = app.theater.reveal.expect("entering starts a reveal");
+        assert_eq!(pending.kind, RevealKind::Enter);
+        assert!(pending.since.is_none());
+        assert_eq!(reveal_fill(&pending, Instant::now()), None);
+
+        let _ = app.handle_theater(TheaterMessage::CoverBounds(Some(cover())));
+        let running = app.theater.reveal.expect("still revealing");
+        assert!(running.since.is_some());
+        assert_eq!(running.rect, Some(cover()));
+        assert_eq!(app.theater.cover_rect, Some(cover()));
+    }
+
+    #[test]
+    fn the_reveal_ends_after_its_duration() {
+        let mut app = home_app();
+        let _ = app.enter_theater();
+        let _ = app.handle_theater(TheaterMessage::CoverBounds(None));
+        let started = app.theater.reveal.and_then(|r| r.since).expect("started");
+
+        tick(&mut app, started + REVEAL_DURATION / 2);
+        assert!(app.theater.reveal.is_some());
+        tick(
+            &mut app,
+            started + REVEAL_DURATION + Duration::from_millis(1),
+        );
+        assert!(app.theater.reveal.is_none());
+    }
+
+    #[test]
+    fn escape_shrinks_the_panel_back_to_the_cover_it_grew_from() {
+        let mut app = home_app();
+        let _ = app.enter_theater();
+        let _ = app.handle_theater(TheaterMessage::CoverBounds(Some(cover())));
+        press_escape(&mut app);
+
+        assert!(!app.theater.active);
+        let leave = app.theater.reveal.expect("leaving animates");
+        assert_eq!(leave.kind, RevealKind::Leave);
+        assert_eq!(leave.rect, Some(cover()));
+    }
+
+    #[test]
+    fn a_keyed_exit_that_goes_on_to_act_is_instant() {
+        let mut app = home_app();
+        let _ = app.enter_theater();
+        let _ = app.exit_theater();
+        assert!(app.theater.reveal.is_none());
+    }
+
+    #[test]
+    fn leaving_mid_entry_turns_around_from_where_the_panel_is() {
+        let mut app = home_app();
+        let _ = app.enter_theater();
+        let _ = app.handle_theater(TheaterMessage::CoverBounds(None));
+        // Pretend the entry has run a third of the way.
+        let third = Instant::now() - REVEAL_DURATION / 3;
+        app.theater.reveal = Some(Reveal {
+            since: Some(third),
+            ..app.theater.reveal.expect("revealing")
+        });
+        let before =
+            reveal_fill(&app.theater.reveal.expect("revealing"), Instant::now()).expect("running");
+
+        let _ = app.exit_theater_animated();
+        let leave = app.theater.reveal.expect("leaving");
+        let after = reveal_fill(&leave, Instant::now()).expect("running");
+        assert!((after - before).abs() < 0.05, "{before} vs {after}");
+    }
+}
+
+mod track_roll {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::{
+        state::RollDirection,
+        update::theater::{ROLL_DURATION, roll_offsets, tick},
+    };
+
+    fn app_in_theater_on(current: &str) -> crate::Nokkvi {
+        let mut app = home_app();
+        app.library.queue_songs = ["a", "b", "c"]
+            .iter()
+            .map(|id| make_queue_song(id, id, "Artist", "Album"))
+            .collect();
+        app.scrobble.current_song_id = Some(current.to_owned());
+        let _ = app.enter_theater();
+        app.theater.reveal = None;
+        app
+    }
+
+    #[test]
+    fn moving_down_the_queue_rolls_next() {
+        let mut app = app_in_theater_on("a");
+        app.begin_theater_roll(Some("b"));
+        assert_eq!(
+            app.theater.roll.as_ref().map(|r| r.direction),
+            Some(RollDirection::Next)
+        );
+    }
+
+    #[test]
+    fn moving_up_the_queue_rolls_previous() {
+        let mut app = app_in_theater_on("c");
+        app.begin_theater_roll(Some("b"));
+        assert_eq!(
+            app.theater.roll.as_ref().map(|r| r.direction),
+            Some(RollDirection::Previous)
+        );
+    }
+
+    #[test]
+    fn nothing_rolls_outside_theater_or_during_the_enter_animation() {
+        let mut app = home_app();
+        app.scrobble.current_song_id = Some("a".to_owned());
+        app.begin_theater_roll(Some("b"));
+        assert!(app.theater.roll.is_none(), "not in theater");
+
+        let mut app = app_in_theater_on("a");
+        let _ = app.exit_theater();
+        app.begin_theater_roll(Some("b"));
+        assert!(app.theater.roll.is_none(), "theater is off again");
+    }
+
+    #[test]
+    fn the_roll_ends_after_its_duration_and_a_leave_drops_it() {
+        let mut app = app_in_theater_on("a");
+        app.begin_theater_roll(Some("b"));
+        let started = app.theater.roll.as_ref().expect("rolling").since;
+        tick(&mut app, started + ROLL_DURATION / 2);
+        assert!(app.theater.roll.is_some());
+        tick(&mut app, started + ROLL_DURATION + Duration::from_millis(1));
+        assert!(app.theater.roll.is_none());
+
+        app.begin_theater_roll(Some("c"));
+        assert!(app.theater.roll.is_some());
+        let _ = app.exit_theater();
+        assert!(app.theater.roll.is_none());
+        let _ = Instant::now();
+    }
+
+    #[test]
+    fn next_carries_things_up_and_previous_down_from_the_same_distance() {
+        // Start: the outgoing piece at rest, the incoming one a full step off.
+        assert_eq!(roll_offsets(RollDirection::Next, 0.0, 100.0), (0.0, 100.0));
+        assert_eq!(
+            roll_offsets(RollDirection::Previous, 0.0, 100.0),
+            (0.0, -100.0)
+        );
+        // End: the incoming piece at rest, the outgoing one a full step off.
+        assert_eq!(roll_offsets(RollDirection::Next, 1.0, 100.0), (-100.0, 0.0));
+        assert_eq!(
+            roll_offsets(RollDirection::Previous, 1.0, 100.0),
+            (100.0, 0.0)
+        );
     }
 }

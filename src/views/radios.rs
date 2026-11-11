@@ -76,6 +76,9 @@ pub struct RadiosViewData<'a> {
     /// boat visible), else `None`. `pub(crate)` — `OverCoverBoat` wraps the
     /// crate-private `BoatState`.
     pub(crate) over_art_boat: Option<crate::widgets::base_slot_list_layout::OverCoverBoat<'a>>,
+    /// The Cover Beat visualizer's swell (`Nokkvi::cover_beat_scale`), drawn
+    /// only while the panel shows the playing station.
+    pub cover_beat_scale: f32,
 }
 
 // ============================================================================
@@ -331,6 +334,7 @@ impl RadiosPage {
             window_height: data.window_height,
             show_artwork_column: true, // station logos / remembered stream art
             slot_list_chrome,
+            header_reserve: data.chrome.header_reserve(),
             bleed: data.bleed,
         };
 
@@ -365,8 +369,8 @@ impl RadiosPage {
             &self.common.slot_list,
             stations,
             &config,
-            RadiosMessage::SlotList(SlotListPageMessage::NavigateUp),
-            RadiosMessage::SlotList(SlotListPageMessage::NavigateDown),
+            RadiosMessage::SlotList(SlotListPageMessage::ScrollUp),
+            RadiosMessage::SlotList(SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(stations.len(), RadiosMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 RadiosMessage::SlotList,
@@ -620,6 +624,16 @@ impl RadiosPage {
                     crate::widgets::base_slot_list_layout::ArtworkPlaceholder::RadioTower
                 },
                 crate::widgets::base_slot_list_layout::PanelShape::FollowColumnMode,
+                crate::widgets::beat_scale::CoverScale {
+                    factor: if panel_station
+                        .is_some_and(|p| data.playing_station.is_some_and(|s| s.id == p.id))
+                    {
+                        data.cover_beat_scale
+                    } else {
+                        1.0
+                    },
+                    overflow: false,
+                },
                 panel_menu_entries,
                 menu_open,
                 menu_position,

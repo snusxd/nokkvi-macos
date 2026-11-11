@@ -1,12 +1,12 @@
 //! Interface tab setting entries — navigation, lists, player bar, font, and
 //! metadata strip.
 //!
-//! 24 rows come from `define_settings!` via `build_interface_tab_settings_items`
+//! 25 rows come from `define_settings!` via `build_interface_tab_settings_items`
 //! (2 Navigation + 7 Slot List + 3 Player Bar + 1 Font & Icons (`icon_set`) +
-//! 5 Metadata Strip + 4 Artwork Column: mode dropdown, `artwork_cover`
-//! dropdown, `artwork_auto_max_pct` slider, `artwork_vertical_height_pct`
-//! slider + 2 Theater: `theater_controls` dropdown,
-//! `theater_window_fullscreen` toggle). The Slot List count includes the
+//! 5 Metadata Strip + 5 Artwork Column: mode dropdown, `artwork_cover`
+//! dropdown, `cover_beat_strength` dropdown, `artwork_auto_max_pct` slider,
+//! `artwork_vertical_height_pct` slider + 2 Theater: `theater_controls`
+//! dropdown, `theater_window_fullscreen` toggle). The Slot List count includes the
 //! `scrollbar_visibility` dropdown plus the three auto-hide sub-controls
 //! (`autohide_collapsed_appearance` / `autohide_toolbar_height` /
 //! `autohide_toolbar_grip`), which are inserted beneath the Auto-hide Toolbar
@@ -65,6 +65,7 @@ pub(crate) fn build_interface_items(data: &InterfaceSettingsData) -> Vec<Setting
         },
         macro_rows.take("general.nav_layout"),
         macro_rows.take("general.nav_display_mode"),
+        macro_rows.take("general.now_playing_sidebar"),
         // --- Slot List ---
         SettingsEntry::Header {
             label: "Slot List",
@@ -104,6 +105,8 @@ pub(crate) fn build_interface_items(data: &InterfaceSettingsData) -> Vec<Setting
         )
         .with_enter_hint()
         .with_activate(ActivateKind::FontPicker),
+        macro_rows.take("general.font_size_px"),
+        macro_rows.take("general.font_weight"),
         macro_rows.take("general.icon_set"),
         // --- Metadata Strip ---
         SettingsEntry::Header {
@@ -183,6 +186,7 @@ pub(crate) fn build_interface_items(data: &InterfaceSettingsData) -> Vec<Setting
         },
         macro_rows.take("general.artwork_column_mode"),
         macro_rows.take("general.artwork_cover"),
+        macro_rows.take("general.cover_beat_strength"),
         macro_rows.take("general.artwork_auto_max_pct"),
         macro_rows.take("general.artwork_vertical_height_pct"),
         // --- Theater ---

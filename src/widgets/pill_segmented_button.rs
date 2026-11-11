@@ -160,7 +160,7 @@ where
         Weight::Normal
     };
     let label = text(option.display.to_uppercase())
-        .size(params.font_size)
+        .size(crate::theme::fs(params.font_size))
         .font(theme::weighted_ui_font(label_weight))
         .color(label_color)
         .wrapping(Wrapping::None);

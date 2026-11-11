@@ -8,6 +8,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/f-o-o-g-s/nokkvi" alt="License" /></a>
 </p>
 
+> **🍴 Fork notice**
+>
+> This is a private fork of [f-o-o-g-s/nokkvi](https://github.com/f-o-o-g-s/nokkvi) (macOS port and local changes). The original project lives upstream; sync with `git fetch upstream && git merge upstream/main`.
+
 A native Rust/Iced client for [Navidrome](https://www.navidrome.org/) music server. Named after Old Norse *nökkvi*, a small, humble boat.
 
 <img src="assets/nokkvi_demo.webp?v=5" width="100%" alt="Nokkvi theme and visualizer demo" />
@@ -65,7 +69,11 @@ cargo build --release                           # build
 ./install.sh                                    # install binary, .desktop, icon
 ```
 
-`install.sh` puts the binary in `~/.local/bin/`. Config lives in `~/.config/nokkvi/`, runtime state and logs in `~/.local/state/nokkvi/`. Filing a bug? See [debug logging](CONTRIBUTING.md#debug-logging).
+`install.sh` puts the binary in `~/.local/bin/`. Config lives in `~/.config/nokkvi/`, runtime state and logs in `~/.local/state/nokkvi/`.
+
+**macOS (in progress):** with Xcode Command Line Tools and `brew install cmake`, `scripts/bundle-macos.sh --install` builds a release binary, wraps it in `Nokkvi.app` (ad-hoc signed) and installs it to `~/Applications/`. Rerun it after every rebuild. Config, state and logs live in `~/Library/Application Support/nokkvi/`.
+
+Filing a bug? See [debug logging](CONTRIBUTING.md#debug-logging).
 
 More in the docs: [Installation](https://f-o-o-g-s.github.io/nokkvi-docs/guides/installation/) · [Connecting to Navidrome](https://f-o-o-g-s.github.io/nokkvi-docs/guides/navidrome/) · [Configuration](https://f-o-o-g-s.github.io/nokkvi-docs/reference/config/) · [Keyboard shortcuts](https://f-o-o-g-s.github.io/nokkvi-docs/reference/hotkeys/) · [MPRIS](https://f-o-o-g-s.github.io/nokkvi-docs/guides/mpris/)
 

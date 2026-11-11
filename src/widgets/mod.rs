@@ -8,8 +8,11 @@
 pub(crate) mod artwork_split_handle;
 pub(crate) mod badge_pip;
 pub(crate) mod base_slot_list_layout;
+pub(crate) mod beat_scale;
 pub(crate) mod boat;
+pub(crate) mod bounds_tag;
 pub(crate) mod drag_column;
+pub(crate) mod drag_strip;
 pub(crate) mod eq_slider;
 pub(crate) mod format_info;
 pub(crate) mod harbour_light;
@@ -27,6 +30,7 @@ pub(crate) mod metadata_pill;
 pub(crate) mod milkdrop_picker;
 pub(crate) mod modal_button;
 pub(crate) mod nav_bar;
+pub(crate) mod now_playing_sidebar;
 pub(crate) mod overflow_pin;
 pub(crate) mod picker_modal;
 pub(crate) mod pill_segmented_button;
@@ -42,6 +46,7 @@ pub(crate) mod sizes;
 pub(crate) mod slider_drag;
 pub(crate) mod slot_list;
 pub(crate) mod slot_list_page;
+pub(crate) mod smooth_scroll;
 pub(crate) mod theater_corner;
 pub(crate) mod track_info_strip;
 pub(crate) mod visualizer;
@@ -104,6 +109,47 @@ pub(crate) fn focus_adjacent_text_input<M: Send + 'static>(forward: bool) -> ice
     )
 }
 
+/// Widget operation that always finishes with `Outcome::Some(Option<Id>)` so
+/// callers receive `Some(id)` when a focusable widget is focused AND `None`
+/// when no widget is focused (unlike `find_focused()`, which returns
+/// `Outcome::None` when unfocused and therefore emits no task output).
+struct QueryFocusedWidget {
+    focused: Option<iced::advanced::widget::Id>,
+}
+
+impl iced::advanced::widget::Operation<Option<iced::advanced::widget::Id>> for QueryFocusedWidget {
+    fn traverse(
+        &mut self,
+        recurse: &mut dyn FnMut(
+            &mut dyn iced::advanced::widget::Operation<Option<iced::advanced::widget::Id>>,
+        ),
+    ) {
+        recurse(self);
+    }
+
+    fn focusable(
+        &mut self,
+        id: Option<&iced::advanced::widget::Id>,
+        _bounds: iced::Rectangle,
+        state: &mut dyn iced::advanced::widget::operation::Focusable,
+    ) {
+        if state.is_focused() {
+            self.focused = id.cloned();
+        }
+    }
+
+    fn finish(
+        &self,
+    ) -> iced::advanced::widget::operation::Outcome<Option<iced::advanced::widget::Id>> {
+        iced::advanced::widget::operation::Outcome::Some(self.focused.clone())
+    }
+}
+
+/// Query which widget currently holds Iced keyboard focus (`Some(id)` or `None`).
+pub(crate) fn query_focused_widget() -> iced::Task<Option<iced::advanced::widget::Id>> {
+    iced::advanced::widget::operate(QueryFocusedWidget { focused: None })
+}
+
 /// Format an integer with comma thousands separators ("13627" → "13,627").
 ///
 /// Used by the library selector popover for the dim right-column song
@@ -135,7 +181,7 @@ fn base_slot_list_empty_content<'a, M: 'a>(message: &'a str) -> iced::Element<'a
 
     container(
         text(message)
-            .size(16)
+            .size(crate::theme::fs(16))
             .font(theme::ui_font())
             .color(theme::fg2()),
     )

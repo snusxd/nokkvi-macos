@@ -601,7 +601,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
     }
 
     let title_text = text(&state.title)
-        .size(16)
+        .size(crate::theme::fs(16))
         .font(theme::ui_font())
         .color(theme::fg0());
 
@@ -622,7 +622,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
             TextInputDialogMessage::PlaylistSelected,
         )
         .width(Length::Fill)
-        .size(13.0)
+        .size(crate::theme::fs(13.0))
         .font(theme::ui_font())
         .padding([8, 8])
         .input_style(dialog_input_style)
@@ -663,7 +663,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
     // Confirmation-only mode: show warning message, no text input
     if state.confirmation_only {
         let warning = text(&state.confirmation_message)
-            .size(13)
+            .size(crate::theme::fs(13))
             .font(theme::ui_font())
             .color(theme::fg3());
         content = content.push(warning.boxed());
@@ -672,8 +672,8 @@ pub(crate) fn text_input_dialog_overlay<'a>(
             let skip_check = checkbox(state.skip_duplicates)
                 .label(format!("Skip the {already_there} already there"))
                 .on_toggle(TextInputDialogMessage::SkipDuplicatesToggled)
-                .size(14)
-                .text_size(13)
+                .size(crate::theme::fs(14))
+                .text_size(crate::theme::fs(13))
                 .font(theme::ui_font())
                 .style(dialog_checkbox_style);
             content = content.push(skip_check.boxed());
@@ -686,7 +686,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
             .on_submit(TextInputDialogMessage::Submit)
             .secure(state.secure)
             .padding(8)
-            .size(14)
+            .size(crate::theme::fs(14))
             .font(theme::ui_font())
             .width(Length::Fill)
             .style(dialog_input_style);
@@ -726,7 +726,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
                 .on_submit(TextInputDialogMessage::Submit)
                 .secure(state.secure)
                 .padding(8)
-                .size(14)
+                .size(crate::theme::fs(14))
                 .font(theme::ui_font())
                 .width(Length::Fill)
                 .style(dialog_input_style);
@@ -752,8 +752,8 @@ pub(crate) fn text_input_dialog_overlay<'a>(
         let public_check = checkbox(state.public)
             .label("Public")
             .on_toggle(TextInputDialogMessage::PublicToggled)
-            .size(14)
-            .text_size(13)
+            .size(crate::theme::fs(14))
+            .text_size(crate::theme::fs(13))
             .font(theme::ui_font())
             .style(dialog_checkbox_style);
         // Indent to align with the input content (16px icon + 8px spacing).
@@ -784,7 +784,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
             format!("This will replace all tracks in \"{name}\".")
         };
         let warning = text(warning_text)
-            .size(12)
+            .size(crate::theme::fs(12))
             .font(theme::ui_font())
             .color(theme::fg3());
         content = content.push(warning.boxed());
@@ -794,7 +794,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
     // input/message in every mode, capped to the dialog's width.
     if let Some(note) = &state.note {
         let note_text = text(note)
-            .size(12)
+            .size(crate::theme::fs(12))
             .font(theme::ui_font())
             .color(theme::fg3());
         content = content.push(container(note_text).width(Length::Fixed(340.0)).boxed());
@@ -807,7 +807,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
     let submit_btn = button(
         container(
             text(submit_label)
-                .size(13)
+                .size(crate::theme::fs(13))
                 .font(theme::ui_font())
                 .color(theme::fg0()),
         )
@@ -846,7 +846,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
     let cancel_btn = button(
         container(
             text("Cancel")
-                .size(13)
+                .size(crate::theme::fs(13))
                 .font(theme::ui_font())
                 .color(theme::fg2()),
         )
@@ -878,7 +878,7 @@ pub(crate) fn text_input_dialog_overlay<'a>(
         let extra_btn = button(
             container(
                 text(label.as_str())
-                    .size(13)
+                    .size(crate::theme::fs(13))
                     .font(theme::ui_font())
                     .color(theme::fg0()),
             )

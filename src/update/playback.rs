@@ -799,6 +799,9 @@ impl Nokkvi {
                 // to round-trip (0→1→0), making the index-based reset in
                 // handle_queue_focus_change miss the song transition.
                 self.engine.gapless_preparing = false;
+                // Theater Mode rolls its cover over to the new track; read
+                // before the scrobble handler moves `current_song_id`.
+                self.begin_theater_roll(song_id.as_deref());
                 self.handle_scrobble_on_song_change(&song_id, pos, &mut tasks);
 
                 // Warm the now-playing track's artwork independent of the
@@ -1830,15 +1833,24 @@ impl Nokkvi {
         };
         let mode = self.settings.visualization_mode;
         viz.set_feed_active(self.visualizer_feed_wanted());
-        if let Some(worker_mode) = crate::widgets::visualizer::VisualizationMode::from_setting(mode)
-        {
+        // Cover Beat draws no shader but reads the feed: the worker runs the
+        // spectrum path (its kick detector runs in every mode), never MilkDrop's
+        // analyzer left over from the mode before it.
+        let worker_mode =
+            if mode == nokkvi_data::types::player_settings::VisualizationMode::CoverBeat {
+                Some(crate::widgets::visualizer::VisualizationMode::Bars)
+            } else {
+                crate::widgets::visualizer::VisualizationMode::from_setting(mode)
+            };
+        if let Some(worker_mode) = worker_mode {
             viz.set_mode(worker_mode);
         }
     }
 
-    /// Whether the audio analysis should run: a visualizer is on, or the
-    /// Harbour Trawl scene is on screen (its night light follows the music
-    /// with the visualizer Off too). The one predicate behind both the
+    /// Whether the audio analysis should run: a visualizer is on (Cover Beat
+    /// included: its kick detector reads the same feed), or the Harbour Trawl
+    /// scene is on screen (its night light follows the music with the
+    /// visualizer Off too). The one predicate behind both the
     /// UI-side FFT feed and the engine's audio tap.
     pub(crate) fn visualizer_feed_wanted(&self) -> bool {
         self.settings.visualization_mode
@@ -2662,6 +2674,9 @@ impl Nokkvi {
         // Apply slot-list scrollbar visibility from persisted settings
         crate::theme::set_scrollbar_visibility(settings.scrollbar_visibility);
 
+        // Apply smooth trackpad scrolling from persisted settings
+        crate::theme::set_smooth_trackpad_scroll(settings.smooth_trackpad_scroll);
+
         // Apply icon set from persisted settings
         crate::theme::set_icon_set(settings.icon_set);
 
@@ -2690,8 +2705,10 @@ impl Nokkvi {
         crate::theme::set_seekbar_style(settings.seekbar_style);
         crate::theme::set_mini_player_seekbar_style(settings.mini_player_seekbar_style);
 
-        // Apply font family from persisted settings
+        // Apply font family, size and weight from persisted settings
         crate::theme::set_font_family(settings.font_family.clone());
+        crate::theme::set_font_size_px(settings.font_size_px);
+        crate::theme::set_font_weight(settings.font_weight);
 
         // Apply strip field visibility from persisted settings
         crate::theme::set_strip_show_title(settings.strip_show_title);

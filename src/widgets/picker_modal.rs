@@ -162,7 +162,7 @@ pub(crate) fn picker_modal<'a, T, M: Clone + 'a>(
     let mut title_row = row![
         Space::new().width(Length::Fixed(12.0)),
         text(title)
-            .size(label_size)
+            .size(crate::theme::fs(label_size))
             .font(theme::weighted_ui_font(Weight::Bold))
             .color(theme::fg0()),
     ];
@@ -201,7 +201,7 @@ pub(crate) fn picker_modal<'a, T, M: Clone + 'a>(
     let main_area: Element<'a, M> = if list.filtered.is_empty() {
         container(
             text(empty_text)
-                .size(14)
+                .size(crate::theme::fs(14))
                 .font(theme::ui_font())
                 .color(theme::fg4()),
         )

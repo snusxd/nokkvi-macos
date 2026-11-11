@@ -25,6 +25,100 @@ for_each_expandable_entity!(find_chain_scenarios);
 // View Switching (navigation.rs)
 // ============================================================================
 
+mod nav_tab_order {
+    use crate::{
+        app_message::{Message, NavigationMessage},
+        test_helpers::test_app,
+        widgets::nav_bar::{NavTabOrder, NavView},
+    };
+
+    fn keys(views: &[&str]) -> Vec<String> {
+        views.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    #[test]
+    fn a_dragged_tab_moves_and_the_order_is_kept_in_settings() {
+        let mut app = test_app();
+        // Radio (last) dragged to the front.
+        let _ = app.update(Message::Navigation(NavigationMessage::ReorderTabs {
+            from: 6,
+            to: 0,
+        }));
+        assert_eq!(
+            app.settings.nav_tab_order,
+            keys(&[
+                "radio",
+                "queue",
+                "albums",
+                "artists",
+                "songs",
+                "genres",
+                "playlists"
+            ])
+        );
+        assert_eq!(app.nav_tab_order().views()[0], NavView::Radios);
+    }
+
+    #[test]
+    fn a_second_drag_moves_within_the_order_already_dragged() {
+        let mut app = test_app();
+        app.settings.nav_tab_order = keys(&["radio", "queue"]);
+        // Shown: Radio, Queue, Albums, …; Queue (1) dragged to the end.
+        let _ = app.handle_reorder_nav_tabs(1, 6);
+        assert_eq!(
+            app.settings.nav_tab_order,
+            keys(&[
+                "radio",
+                "albums",
+                "artists",
+                "songs",
+                "genres",
+                "playlists",
+                "queue"
+            ])
+        );
+    }
+
+    #[test]
+    fn a_drop_in_place_or_out_of_range_changes_nothing() {
+        let mut app = test_app();
+        let _ = app.handle_reorder_nav_tabs(2, 2);
+        let _ = app.handle_reorder_nav_tabs(7, 0);
+        let _ = app.handle_reorder_nav_tabs(0, 9);
+        assert!(app.settings.nav_tab_order.is_empty());
+        assert_eq!(app.nav_tab_order(), NavTabOrder::default());
+    }
+
+    #[test]
+    fn a_hand_edited_order_drops_unknown_keys_and_keeps_every_tab() {
+        let order = NavTabOrder::from_keys(&keys(&["songs", "bogus", "songs", "queue"]));
+        assert_eq!(
+            order.views(),
+            &[
+                NavView::Songs,
+                NavView::Queue,
+                NavView::Albums,
+                NavView::Artists,
+                NavView::Genres,
+                NavView::Playlists,
+                NavView::Radios,
+            ]
+        );
+    }
+
+    #[test]
+    fn every_tab_key_round_trips() {
+        for view in NavView::ALL {
+            let order = NavTabOrder::from_keys(&[view.key().to_string()]);
+            assert_eq!(order.views()[0], *view, "{}", view.key());
+        }
+        assert_eq!(
+            NavTabOrder::from_keys(&NavTabOrder::default().keys()),
+            NavTabOrder::default()
+        );
+    }
+}
+
 #[test]
 fn switch_view_updates_current_view() {
     let mut app = test_app();

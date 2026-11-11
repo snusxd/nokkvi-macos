@@ -12,6 +12,10 @@ use std::sync::Arc;
 
 use nokkvi_data::types::lyrics::{LrcDocument, LyricsIndex};
 
+/// How long a sheet that lands after its song began takes to fade in, so a
+/// lookup answering mid-track never pops the text onto the panel.
+pub(crate) const LYRICS_ARRIVAL_FADE_MS: u32 = 450;
+
 /// The previous track's lyric sheet, dissolving out across a transition while
 /// the incoming sheet fades in — the UI-timed companion to the audio
 /// crossfade. Parked by `park_outgoing` at the song-change edge; expired by
@@ -97,6 +101,11 @@ pub struct LyricsState {
     /// `promote_next()`) and every Lyrics mode change, so the next song is
     /// Auto's again.
     pub auto_override: Option<AutoOverride>,
+    /// When a resolve landed a sheet with lines for the current song, so the
+    /// panel fades it in ([`Self::arrival_progress`]). `None` for a sheet
+    /// promoted at the song change (the transition's own fade carries it) and
+    /// after every clear.
+    pub landed_at: Option<std::time::Instant>,
 }
 
 /// Toggle Lyrics' verdict for one song in Auto (`LyricsState::auto_override`).
@@ -143,6 +152,7 @@ impl LyricsState {
     /// bump the epoch so an in-flight resolve for the old track is rejected.
     pub fn clear(&mut self) {
         self.doc = LrcDocument::default();
+        self.landed_at = None;
         self.pending_next = None;
         self.matched_song_id = None;
         self.active_index = None;
@@ -155,6 +165,19 @@ impl LyricsState {
         self.reset_clock();
         self.reset_scroll();
         self.load_epoch.bump();
+    }
+
+    /// How far a sheet that just landed has faded in (`0.0..1.0`, eased), or
+    /// `None` once it is fully in (or nothing landed late).
+    pub fn arrival_progress(&self, now: std::time::Instant) -> Option<f32> {
+        let landed = self.landed_at?;
+        let t = now.saturating_duration_since(landed).as_secs_f32() * 1000.0
+            / LYRICS_ARRIVAL_FADE_MS as f32;
+        (t < 1.0).then(|| {
+            // Ease out: the text comes up quickly and settles softly.
+            let t = t.clamp(0.0, 1.0);
+            1.0 - (1.0 - t).powi(3)
+        })
     }
 
     /// Whether Auto shows the layer for `song_id`: Toggle Lyrics' verdict
@@ -246,6 +269,7 @@ impl LyricsState {
         match self.pending_next.take() {
             Some((id, doc)) if id == new_id => {
                 self.doc = doc;
+                self.landed_at = None;
                 self.matched_song_id = Some(id);
                 self.active_index = None;
                 // The incoming sheet starts unscrolled and unglided, whatever
@@ -308,6 +332,25 @@ mod tests {
         assert_eq!(state.matched_song_id.as_deref(), Some("s2"));
         assert_eq!(state.doc.lines.len(), 1);
         assert!(state.pending_next.is_none());
+    }
+
+    #[test]
+    fn a_late_sheet_fades_in_and_a_song_change_drops_the_fade() {
+        let now = std::time::Instant::now();
+        let mut state = LyricsState {
+            landed_at: Some(now),
+            pending_next: Some(("s2".into(), LrcDocument::default())),
+            ..Default::default()
+        };
+        assert_eq!(state.arrival_progress(now), Some(0.0));
+        let done = now + std::time::Duration::from_millis(u64::from(LYRICS_ARRIVAL_FADE_MS));
+        assert_eq!(state.arrival_progress(done), None);
+
+        assert!(state.promote_next("s2"));
+        assert!(state.landed_at.is_none());
+        state.landed_at = Some(now);
+        state.clear();
+        assert!(state.landed_at.is_none());
     }
 
     #[test]

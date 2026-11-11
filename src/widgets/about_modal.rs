@@ -125,7 +125,7 @@ pub(crate) fn about_modal_overlay<'a>(
 
     // ── Header: [Nokkvi  ·····  📋  X] ──────────────────────────
     let title_text = text("Nokkvi")
-        .size(20.0)
+        .size(crate::theme::fs(20.0))
         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
         .color(theme::accent_bright());
 
@@ -142,7 +142,7 @@ pub(crate) fn about_modal_overlay<'a>(
     );
 
     let etymology = text("Old Norse nökkvi: a small, humble boat")
-        .size(12.0)
+        .size(crate::theme::fs(12.0))
         .font(iced::font::Font {
             style: iced::font::Style::Italic,
             ..theme::ui_font()
@@ -169,12 +169,12 @@ pub(crate) fn about_modal_overlay<'a>(
     .align_x(Alignment::Center);
 
     let tagline = text("A sturdy hull for the endless stream.")
-        .size(14.0)
+        .size(crate::theme::fs(14.0))
         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
         .color(theme::fg1());
 
     let description = text("A Rust/Iced desktop client for Navidrome music servers")
-        .size(12.0)
+        .size(crate::theme::fs(12.0))
         .font(theme::ui_font())
         .color(theme::fg3());
 
@@ -203,7 +203,7 @@ pub(crate) fn about_modal_overlay<'a>(
                             color: Some(theme::danger_bright()),
                         }),
                     text("Buy foogs a coffee on Ko-fi")
-                        .size(13.0)
+                        .size(crate::theme::fs(13.0))
                         .font(theme::ui_font())
                         .color(theme::fg2()),
                 ]
@@ -278,7 +278,7 @@ fn info_row<'a>(label: &str, value: &str) -> Element<'a, AboutModalMessage> {
     row![
         container(
             text(label.to_string())
-                .size(LABEL_SIZE)
+                .size(crate::theme::fs(LABEL_SIZE))
                 .font(theme::ui_font())
                 .color(theme::fg4()),
         )
@@ -290,7 +290,7 @@ fn info_row<'a>(label: &str, value: &str) -> Element<'a, AboutModalMessage> {
             right: 8.0,
         }),
         text(value.to_string())
-            .size(VALUE_SIZE)
+            .size(crate::theme::fs(VALUE_SIZE))
             .font(theme::ui_font())
             .color(theme::fg1())
             .wrapping(iced::widget::text::Wrapping::None)

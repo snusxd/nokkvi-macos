@@ -193,6 +193,14 @@ fn cycling_the_visualizer_points_the_fft_worker_at_each_mode() {
         assert!(viz.feed_active(), "{expected:?} keeps the feed open");
     }
 
+    // Cover Beat draws no shader but reads the feed; the worker leaves
+    // MilkDrop's analyzer for the spectrum path.
+    let _ = app.handle_cycle_visualization();
+    assert_eq!(app.settings.visualization_mode, Setting::CoverBeat);
+    let viz = app.visualizer.as_ref().expect("visualizer");
+    assert_eq!(viz.worker_mode(), Worker::Bars);
+    assert!(viz.feed_active(), "Cover Beat keeps the feed open");
+
     let _ = app.handle_cycle_visualization();
     assert_eq!(app.settings.visualization_mode, Setting::Off);
     let viz = app.visualizer.as_ref().expect("visualizer");
@@ -267,4 +275,143 @@ fn reflection_below_cover_gates_the_over_cover_spill() {
     assert!(spill_floor(&app).is_some(), "Lines follows its own toggle");
     app.visualizer_config.write().lines.reflection_below_cover = false;
     assert_eq!(spill_floor(&app), None);
+}
+
+// ============================================================================
+// Cover Beat
+// ============================================================================
+
+mod cover_beat {
+    use std::time::{Duration, Instant};
+
+    use nokkvi_data::types::player_settings::{CoverBeatStrength, VisualizationMode};
+
+    use crate::{state::CoverPulse, test_helpers::test_app};
+
+    fn cover_beat_app(strength: CoverBeatStrength) -> crate::Nokkvi {
+        let mut app = test_app();
+        app.settings.visualization_mode = VisualizationMode::CoverBeat;
+        app.settings.cover_beat_strength = strength;
+        app
+    }
+
+    /// One kick at `t0`: the first read only syncs, the second is new.
+    fn kick(app: &mut crate::Nokkvi, t0: Instant) {
+        app.cover_beat.observe(7, 1.0, true, t0);
+        app.cover_beat.observe(8, 1.0, true, t0);
+    }
+
+    #[test]
+    fn cover_beat_follows_off_in_the_cycle_after_milkdrop() {
+        assert_eq!(
+            VisualizationMode::Milkdrop.next(),
+            VisualizationMode::CoverBeat
+        );
+        assert_eq!(VisualizationMode::CoverBeat.next(), VisualizationMode::Off);
+    }
+
+    #[test]
+    fn cover_beat_opens_the_feed_and_draws_no_shader() {
+        let app = cover_beat_app(CoverBeatStrength::Subtle);
+        assert!(
+            app.visualizer_feed_wanted(),
+            "the kick detector needs the feed"
+        );
+        let slots = crate::widgets::visualizer::resolve_placement(
+            VisualizationMode::CoverBeat,
+            crate::visualizer_config::VisualizerPlacement::OverCover,
+            crate::visualizer_config::VisualizerPlacement::BottomBand,
+        );
+        assert_eq!(slots.over_art, None);
+        assert_eq!(slots.bottom_band, None);
+    }
+
+    #[test]
+    fn another_mode_keeps_the_cover_still() {
+        let mut app = cover_beat_app(CoverBeatStrength::Punchy);
+        app.settings.visualization_mode = VisualizationMode::Scope;
+        let t0 = Instant::now();
+        kick(&mut app, t0);
+        let at_peak = t0 + Duration::from_millis(35);
+        assert!((app.cover_beat_scale(at_peak) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_kick_swells_the_cover_and_it_settles() {
+        let mut app = cover_beat_app(CoverBeatStrength::Punchy);
+        let t0 = Instant::now();
+        app.cover_beat.observe(7, 1.0, true, t0);
+        assert!(app.cover_beat.swell.is_none(), "the first read only syncs");
+        app.cover_beat.observe(8, 1.0, true, t0);
+        let peak = app.cover_beat_scale(t0 + Duration::from_millis(35));
+        let growth = CoverBeatStrength::Punchy.peak_growth();
+        assert!(
+            (peak - (1.0 + growth)).abs() < 1e-3,
+            "a full-strength kick reaches the strength's growth: {peak}"
+        );
+        let later = app.cover_beat_scale(t0 + Duration::from_millis(200));
+        assert!(later > 1.0 && later < peak, "it falls back: {later}");
+        let settled = t0 + Duration::from_secs(2);
+        assert!((app.cover_beat_scale(settled) - 1.0).abs() < 1e-4);
+        assert!(!app.cover_beat.in_motion(settled));
+    }
+
+    #[test]
+    fn punchy_grows_further_than_subtle() {
+        let t0 = Instant::now();
+        let peak = |strength| {
+            let mut app = cover_beat_app(strength);
+            kick(&mut app, t0);
+            app.cover_beat_scale(t0 + Duration::from_millis(35))
+        };
+        assert!(peak(CoverBeatStrength::Punchy) > peak(CoverBeatStrength::Subtle));
+        assert!(peak(CoverBeatStrength::Subtle) > 1.0);
+    }
+
+    #[test]
+    fn a_kick_while_paused_starts_no_swell() {
+        let mut pulse = CoverPulse::default();
+        let now = Instant::now();
+        pulse.observe(0, 1.0, false, now);
+        pulse.observe(1, 1.0, false, now);
+        assert!(pulse.swell.is_none());
+        assert_eq!(pulse.seen, Some(1), "the kick is still marked seen");
+    }
+
+    #[test]
+    fn a_kick_mid_fall_rises_from_where_the_cover_stands() {
+        let mut pulse = CoverPulse::default();
+        let t0 = Instant::now();
+        pulse.observe(0, 1.0, true, t0);
+        pulse.observe(1, 1.0, true, t0);
+        let t1 = t0 + Duration::from_millis(120);
+        let before = pulse.level(t1);
+        pulse.observe(2, 0.6, true, t1);
+        assert!(
+            (pulse.level(t1) - before).abs() < 1e-4,
+            "no jump on the new kick"
+        );
+    }
+
+    #[test]
+    fn the_frame_step_starts_a_swell_only_while_playing() {
+        let mut app = super::app_with_visualizer();
+        app.settings.visualization_mode = VisualizationMode::CoverBeat;
+        app.playback.playing = true;
+        app.playback.paused = false;
+        let now = Instant::now();
+        crate::update::cover_beat::step(&mut app, now);
+        assert_eq!(app.cover_beat.seen, Some(0), "the first frame syncs");
+        assert!(app.cover_beat.swell.is_none(), "no kick yet");
+    }
+
+    #[test]
+    fn a_settling_swell_keeps_the_frames_running_after_the_mode_leaves() {
+        let mut app = cover_beat_app(CoverBeatStrength::Subtle);
+        app.playback.playing = false;
+        app.settings.visualization_mode = VisualizationMode::Off;
+        let now = Instant::now();
+        kick(&mut app, now);
+        assert!(app.frames_wanted(), "a swell in flight needs frames");
+    }
 }

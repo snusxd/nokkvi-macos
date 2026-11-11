@@ -89,6 +89,7 @@ pub(crate) fn editor_effective_chrome(
         window_height,
         show_artwork_column: true,
         slot_list_chrome: chrome,
+        header_reserve: None,
         bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
     };
     chrome + vertical_artwork_chrome(&layout)
@@ -130,6 +131,7 @@ impl PlaylistEditorState {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome: chrome_height,
+            header_reserve: None,
             bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
         };
 
@@ -331,7 +333,7 @@ impl PlaylistEditorState {
         };
         let eyebrow = iced::widget::text(eyebrow_label)
             .font(crate::theme::weighted_ui_font(iced::font::Weight::Semibold))
-            .size(9.5)
+            .size(crate::theme::fs(9.5))
             .color(accent)
             .wrapping(iced::widget::text::Wrapping::None);
 
@@ -339,7 +341,7 @@ impl PlaylistEditorState {
             .id(EDITOR_NAME_INPUT_ID)
             .on_input(EditorMessage::NameChanged)
             .font(crate::theme::weighted_ui_font(iced::font::Weight::Bold))
-            .size(14)
+            .size(crate::theme::fs(14))
             .width(Length::Fill)
             .padding([2, 4])
             .style(|_theme, _status| iced::widget::text_input::Style {
@@ -357,7 +359,7 @@ impl PlaylistEditorState {
         let comment_input = iced::widget::text_input("Comment", data.comment.clone())
             .on_input(EditorMessage::CommentChanged)
             .font(crate::theme::ui_font())
-            .size(11)
+            .size(crate::theme::fs(11))
             .width(Length::Fill)
             .padding([2, 4])
             .style(|_theme, _status| iced::widget::text_input::Style {
@@ -413,7 +415,7 @@ impl PlaylistEditorState {
                 trigger,
                 container(
                     iced::widget::text(label)
-                        .size(11.0)
+                        .size(crate::theme::fs(11.0))
                         .font(crate::theme::ui_font()),
                 )
                 .padding(4),

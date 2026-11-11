@@ -666,6 +666,24 @@ fn decoder_output_format(decoder: &dyn SymphoniaDecoder) -> (AudioFormat, String
     )
 }
 
+/// What a Subsonic error envelope in `url`'s answer says, as
+/// `server error {code}: {message}`: one GET, only the first chunk of the body
+/// read. `None` when the answer isn't an error envelope or can't be fetched, so
+/// the caller keeps its own message. The URL never reaches the text.
+async fn subsonic_error_detail(client: &reqwest::Client, url: &str) -> Option<String> {
+    let mut response = client.get(url).send().await.ok()?;
+    let chunk = response.chunk().await.ok()??;
+    let body: serde_json::Value = serde_json::from_slice(&chunk).ok()?;
+    let error = body.get("subsonic-response")?.get("error")?;
+    let message = error.get("message")?.as_str()?;
+    Some(
+        match error.get("code").and_then(serde_json::Value::as_i64) {
+            Some(code) => format!("server error {code}: {message}"),
+            None => format!("server error: {message}"),
+        },
+    )
+}
+
 impl AudioDecoder {
     pub fn new(live_icy_metadata: std::sync::Arc<std::sync::RwLock<Option<String>>>) -> Self {
         Self {
@@ -817,9 +835,16 @@ impl AudioDecoder {
                                 || lowered.starts_with("text/xml")
                                 || lowered.starts_with("application/xml")
                             {
+                                // The HEAD carries no body: ask once for the envelope
+                                // so the failure names what the server said ("Data
+                                // not found" for a track whose file is gone, a
+                                // transcoder error, ...) rather than a guess.
+                                let detail = subsonic_error_detail(&client, &self.url)
+                                    .await
+                                    .map_or_else(String::new, |d| format!(": {d}"));
                                 anyhow::bail!(
                                     "server returned an error response instead of audio \
-                                 (content-type {ct}); the track may no longer exist \
+                                 (content-type {ct}){detail}; the track may no longer exist \
                                  on the server"
                                 );
                             }
@@ -2826,6 +2851,49 @@ pub(crate) mod tests {
             ]
         );
         assert_eq!(delivery, StreamDelivery::Sized);
+    }
+
+    /// A track the server can't serve answers with a Subsonic error envelope
+    /// (HTTP 200, JSON). The failure carries the server's own words, not just
+    /// "the track may no longer exist".
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_json_error_answer_names_the_servers_error() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 2048];
+                    let len = socket.read(&mut request).await.unwrap_or(0);
+                    let head = request[..len].starts_with(b"HEAD");
+                    let body = br#"{"subsonic-response":{"status":"failed","error":{"code":70,"message":"Data not found"}}}"#;
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(headers.as_bytes()).await;
+                    if !head {
+                        let _ = socket.write_all(body).await;
+                    }
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        let mut decoder = AudioDecoder::default();
+        let err = decoder
+            .init(&format!("http://{addr}/rest/stream?id=x"))
+            .await
+            .expect_err("a JSON answer is not audio");
+        let text = err.to_string();
+        assert!(text.contains("server error 70: Data not found"), "{text}");
+        assert!(!text.contains("127.0.0.1"), "the URL must not leak: {text}");
     }
 
     /// The header's parse: Navidrome writes seconds as a float (Go's `'G'`

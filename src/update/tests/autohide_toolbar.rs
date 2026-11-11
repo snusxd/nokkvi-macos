@@ -585,3 +585,33 @@ fn reveal_current_toolbar_is_noop_on_settings() {
     app.reveal_current_toolbar();
     assert!(app.songs_page.common.toolbar_reveal_until.is_none());
 }
+
+#[test]
+fn clicking_searchbar_keeps_toolbar_revealed_when_hover_exits() {
+    let mut app = songs_app();
+    // 1. User hovers collapsed toolbar -> revealed.
+    let _ = app
+        .songs_page
+        .common
+        .handle(SlotListPageMessage::ToolbarHoverEnter, 0);
+    assert!(app.songs_page.common.toolbar_revealed(true));
+
+    // 2. User clicks the Songs search input -> sync_search_focus marks it focused.
+    app.sync_search_focus(Some(iced::advanced::widget::Id::from(
+        crate::views::SONGS_SEARCH_ID,
+    )));
+    assert!(app.songs_page.common.search_input_focused);
+
+    // 3. Cursor leaves the toolbar -> stays revealed because searchbar is active.
+    let _ = app
+        .songs_page
+        .common
+        .handle(SlotListPageMessage::ToolbarHoverExit, 0);
+    assert!(!app.songs_page.common.toolbar_hovered);
+    assert!(app.songs_page.common.toolbar_revealed(true));
+
+    // 4. User clicks outside the searchbar -> focus cleared, toolbar auto-hides.
+    app.sync_search_focus(None);
+    assert!(!app.songs_page.common.search_input_focused);
+    assert!(!app.songs_page.common.toolbar_revealed(true));
+}

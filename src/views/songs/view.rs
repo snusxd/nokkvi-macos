@@ -56,10 +56,22 @@ impl SongsPage {
                 SongsMessage::SlotList(crate::widgets::SlotListPageMessage::SearchQueryChanged(q))
             }),
             buttons: {
+                let is_favorited = self.common.current_sort_mode == SortMode::Favorited;
+                let fav_target = if is_favorited {
+                    SortMode::RecentlyAdded
+                } else {
+                    SortMode::Favorited
+                };
                 let mut btns = vec![
                     HeaderButton::SortToggle(SongsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ToggleSortOrder,
                     )),
+                    HeaderButton::Favorites {
+                        active: is_favorited,
+                        on_press: SongsMessage::SlotList(
+                            crate::widgets::SlotListPageMessage::SortModeSelected(fav_target),
+                        ),
+                    },
                     HeaderButton::Refresh(SongsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::RefreshViewData,
                     )),
@@ -121,6 +133,7 @@ impl SongsPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: data.chrome.header_reserve(),
             bleed: data.bleed,
         };
 
@@ -157,8 +170,8 @@ impl SongsPage {
             &self.common.slot_list,
             songs,
             &config,
-            SongsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateUp),
-            SongsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateDown),
+            SongsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollUp),
+            SongsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(songs.len(), SongsMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 SongsMessage::SlotList,
@@ -317,7 +330,7 @@ impl SongsPage {
                                      click: Option<SongsMessage>|
                      -> Element<'_, SongsMessage> {
                         crate::widgets::link_text::LinkText::new(label)
-                            .size(font_size)
+                            .size(crate::theme::fs(font_size))
                             .color(style.subtext_color)
                             .hover_color(style.hover_text_color)
                             .font(crate::theme::ui_font())
@@ -503,11 +516,11 @@ impl SongsPage {
 
                 let mut col = column![
                     text(song.title.clone())
-                        .size(20)
+                        .size(crate::theme::fs(20))
                         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                         .color(theme::fg0()),
                     text(song.artist.clone())
-                        .size(16)
+                        .size(crate::theme::fs(16))
                         .color(theme::fg1())
                         .font(theme::ui_font()),
                 ]

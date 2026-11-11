@@ -252,20 +252,48 @@ impl Nokkvi {
             | View::Genres
             | View::Playlists
             | View::Radios => {
-                // The synthesized SetOffset is a click, for the centred row's
-                // artwork and the next page. A scrollbar drag selects nothing,
-                // so rows ticked before it stay ticked, as through a keyboard
-                // scroll.
-                let (msg, ticked) = self.view_page(view).map_or((None, None), |page| {
-                    let offset = page.common().slot_list.viewport_offset;
+                // Trigger artwork prefetch and page loads via the synthesized
+                // SetOffset, while preserving the slot list's selection and
+                // viewport state so scrolling never alters which row (if any)
+                // is selected.
+                let (msg, saved_state) = self.view_page(view).map_or((None, None), |page| {
+                    let sl = &page.common().slot_list;
+                    let offset = sl.selected_offset.unwrap_or(sl.viewport_offset);
                     (
                         page.synth_set_offset_message(offset),
-                        page.common().ticked_rows(),
+                        Some((
+                            sl.viewport_offset,
+                            sl.selected_offset,
+                            sl.selected_offset_pinned,
+                            sl.selected_indices.clone(),
+                            sl.anchor_index,
+                            sl.suppress_center_highlight,
+                            sl.keyboard_focused,
+                        )),
                     )
                 });
                 let task = msg.map_or_else(Task::none, |m| self.update(m));
-                if let (Some(ticked), Some(page)) = (ticked, self.view_page_mut(view)) {
-                    page.common_mut().restore_ticked_rows(ticked);
+                if let (
+                    Some((
+                        viewport_offset,
+                        selected_offset,
+                        selected_offset_pinned,
+                        selected_indices,
+                        anchor_index,
+                        suppress_center_highlight,
+                        keyboard_focused,
+                    )),
+                    Some(page),
+                ) = (saved_state, self.view_page_mut(view))
+                {
+                    let sl = &mut page.common_mut().slot_list;
+                    sl.viewport_offset = viewport_offset;
+                    sl.selected_offset = selected_offset;
+                    sl.selected_offset_pinned = selected_offset_pinned;
+                    sl.selected_indices = selected_indices;
+                    sl.anchor_index = anchor_index;
+                    sl.suppress_center_highlight = suppress_center_highlight;
+                    sl.keyboard_focused = keyboard_focused;
                 }
                 task
             }

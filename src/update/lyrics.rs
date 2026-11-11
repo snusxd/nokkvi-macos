@@ -371,6 +371,10 @@ impl Nokkvi {
                         Default::default()
                     };
                     self.lyrics.matched_song_id = Some(song_id);
+                    // A sheet arriving after its song began fades in rather
+                    // than popping onto the panel.
+                    self.lyrics.landed_at =
+                        (!self.lyrics.doc.lines.is_empty()).then(std::time::Instant::now);
                     // The song change zeroed the playhead and only the tick
                     // refreshes it — which cannot happen until this doc is
                     // matched, one tick from now. Seed it from the transport

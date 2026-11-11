@@ -703,3 +703,33 @@ fn the_reflection_spill_stops_at_the_player_bar_under_the_artwork() {
     app.theater.active = true;
     assert_eq!(app.reflection_spill_floor(), app.window.height);
 }
+
+#[test]
+fn unlowered_player_bar_runs_under_the_now_playing_sidebar() {
+    // The Now Playing sidebar stops above the player bar, which spans the
+    // window right of the side nav; the band and toast riding on it follow.
+    let _guard = THEME_MODE_LOCK.lock();
+    let _restore = UiModeGuard::snapshot();
+    let mut app = lowered_queue_app();
+    app.settings.now_playing_sidebar = true;
+    set_artwork_column_mode(ArtworkColumnMode::Never);
+
+    for layout in [NavLayout::Side, NavLayout::Top, NavLayout::None] {
+        set_nav_layout(layout);
+        assert!(app.lowered_player_bar_width().is_none());
+        let nav = if layout == NavLayout::Side {
+            crate::widgets::side_nav_bar::side_nav_total_width()
+        } else {
+            0.0
+        };
+        let span = app.bottom_chrome_span();
+        assert!(
+            (span.left - nav).abs() < f32::EPSILON,
+            "{layout:?}: the band starts at the side nav, not the sidebar, got {span:?}",
+        );
+        assert!(
+            (span.left + span.width - app.window.width).abs() < 0.5,
+            "{layout:?}: the band runs to the window's right edge, got {span:?}",
+        );
+    }
+}

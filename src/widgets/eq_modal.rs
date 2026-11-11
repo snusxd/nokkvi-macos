@@ -109,7 +109,7 @@ pub(crate) fn eq_modal_overlay<'a>(
 
     // ── Header ──────────────────────────────────────────────────
     let title_text = text("Equalizer")
-        .size(20.0)
+        .size(crate::theme::fs(20.0))
         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
         .color(theme::accent_bright());
     // Icon-only button helper — view header pattern:
@@ -152,26 +152,30 @@ pub(crate) fn eq_modal_overlay<'a>(
                     color: iced::Color,
                     msg: EqModalMessage|
      -> Element<'a, EqModalMessage> {
-        button(text(label).size(13.0).font(theme::ui_font()))
-            .on_press(msg)
-            .padding([4, 10])
-            .style(move |_theme, status| {
-                let bg = match status {
-                    button::Status::Hovered | button::Status::Pressed => theme::bg2(),
-                    _ => theme::bg0_hard(),
-                };
-                button::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        color,
-                        width: 1.0,
-                        radius: theme::ui_border_radius(),
-                    },
-                    text_color: color,
-                    ..Default::default()
-                }
-            })
-            .boxed()
+        button(
+            text(label)
+                .size(crate::theme::fs(13.0))
+                .font(theme::ui_font()),
+        )
+        .on_press(msg)
+        .padding([4, 10])
+        .style(move |_theme, status| {
+            let bg = match status {
+                button::Status::Hovered | button::Status::Pressed => theme::bg2(),
+                _ => theme::bg0_hard(),
+            };
+            button::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    color,
+                    width: 1.0,
+                    radius: theme::ui_border_radius(),
+                },
+                text_color: color,
+                ..Default::default()
+            }
+        })
+        .boxed()
     };
 
     let enable_btn_text = if eq_enabled { "Enabled" } else { "Disabled" };
@@ -194,7 +198,12 @@ pub(crate) fn eq_modal_overlay<'a>(
             28.0,
             EqModalMessage::SavePreset,
         ),
-        container(text("Save Preset").size(11.0).font(theme::ui_font())).padding(4),
+        container(
+            text("Save Preset")
+                .size(crate::theme::fs(11.0))
+                .font(theme::ui_font()),
+        )
+        .padding(4),
         tooltip::Position::Bottom,
     )
     .gap(4)
@@ -208,7 +217,12 @@ pub(crate) fn eq_modal_overlay<'a>(
             28.0,
             EqModalMessage::ResetAll,
         ),
-        container(text("Reset").size(11.0).font(theme::ui_font())).padding(4),
+        container(
+            text("Reset")
+                .size(crate::theme::fs(11.0))
+                .font(theme::ui_font()),
+        )
+        .padding(4),
         tooltip::Position::Bottom,
     )
     .gap(4)
@@ -267,7 +281,7 @@ pub(crate) fn eq_modal_overlay<'a>(
     )
     .on_select(EqModalMessage::PresetSelected)
     .font(theme::ui_font())
-    .text_size(14.0)
+    .text_size(crate::theme::fs(14.0))
     .placeholder(if eq_enabled { "Custom" } else { "EQ Off" })
     .padding([4, 8])
     .style(move |_theme, status| pick_list::Style {
@@ -324,7 +338,7 @@ pub(crate) fn eq_modal_overlay<'a>(
         let name_input = iced::widget::text_input("Preset name...", save_name)
             .on_input(EqModalMessage::SavePresetNameChanged)
             .on_submit(EqModalMessage::SavePresetConfirm)
-            .size(14.0)
+            .size(crate::theme::fs(14.0))
             .padding([4, 8])
             .width(Length::Fixed(200.0))
             .font(theme::ui_font())
@@ -346,7 +360,7 @@ pub(crate) fn eq_modal_overlay<'a>(
 
         row![
             text("Save Preset")
-                .size(16.0)
+                .size(crate::theme::fs(16.0))
                 .color(theme::accent_bright())
                 .font(theme::weighted_ui_font(iced::font::Weight::Bold)),
             name_input,
@@ -399,13 +413,13 @@ pub(crate) fn eq_modal_overlay<'a>(
         };
 
         let val_label = text(val_text)
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .color(val_color)
             .font(theme::ui_font());
 
         // Frequency label (e.g. 1K)
         let freq_label = text(BAND_FREQS[i])
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .color(theme::fg3())
             .font(theme::ui_font());
 

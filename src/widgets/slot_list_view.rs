@@ -88,6 +88,17 @@ pub struct SlotListView {
     /// slot's bounds (chrome, gap, different pane). Read by the cross-pane
     /// drag handlers in lieu of cursor-Y → slot chrome math.
     pub hovered_slot: Option<HoveredSlot>,
+    /// When `true` and `selected_offset` is `None`, suppresses the fallback
+    /// center-slot highlight so mouse-wheel / scrollbar scrolling without a
+    /// prior selection does not highlight whichever row passes through the
+    /// viewport centre.
+    pub suppress_center_highlight: bool,
+    /// Whether the user has explicitly navigated with the keyboard (`move_up`
+    /// / `move_down`) since the last selection reset. If a mouse scroll occurs
+    /// while `keyboard_focused` is true and `selected_offset` is `None`, the
+    /// keyboard-focused row is promoted to `selected_offset` so it stays
+    /// selected as the viewport scrolls away.
+    pub keyboard_focused: bool,
 }
 
 /// The transient scrollbar's opacity at `now`, from the last scroll
@@ -123,6 +134,8 @@ impl SlotListView {
             selected_indices: std::collections::BTreeSet::new(),
             anchor_index: None,
             hovered_slot: None,
+            suppress_center_highlight: false,
+            keyboard_focused: false,
         }
     }
 
@@ -205,14 +218,36 @@ impl SlotListView {
         center_slot: usize,
         allow_end: bool,
     ) -> Option<usize> {
+        self.slot_to_item_signed(
+            slot_index as isize,
+            total_items,
+            slot_count,
+            center_slot,
+            allow_end,
+        )
+    }
+
+    /// [`Self::slot_to_item`] for a slot that may sit outside the list: `-1` is
+    /// the row just above slot 0 and `slot_count` the row just below the last
+    /// slot. Smooth scrolling draws both so the row sliding into view is
+    /// already there. A list that fits its slots never scrolls, so it has none.
+    pub(crate) fn slot_to_item_signed(
+        &self,
+        slot_index: isize,
+        total_items: usize,
+        slot_count: usize,
+        center_slot: usize,
+        allow_end: bool,
+    ) -> Option<usize> {
         // Top-packing: slot N maps directly to item N (viewport_offset ignored).
         if total_items < slot_count {
+            let slot = usize::try_from(slot_index).ok()?;
             let in_range = if allow_end {
-                slot_index <= total_items
+                slot <= total_items
             } else {
-                slot_index < total_items
+                slot < total_items
             };
-            return if in_range { Some(slot_index) } else { None };
+            return if in_range { Some(slot) } else { None };
         }
         if total_items == 0 {
             return None;
@@ -269,6 +304,12 @@ impl SlotListView {
 
     /// Calculate opacity for a slot based on distance from a dynamic center
     pub fn calculate_slot_opacity_with_center(slot_index: usize, center_slot: usize) -> f32 {
+        Self::calculate_slot_opacity_signed(slot_index as isize, center_slot)
+    }
+
+    /// [`Self::calculate_slot_opacity_with_center`] for a slot that may sit
+    /// outside the list (see [`Self::slot_to_item_signed`]).
+    pub fn calculate_slot_opacity_signed(slot_index: isize, center_slot: usize) -> f32 {
         let distance = (slot_index as i32 - center_slot as i32).abs();
         let opacity = 1.0 - (distance as f32 * 0.2);
         opacity.max(0.2)
@@ -285,6 +326,8 @@ impl SlotListView {
         if total_items == 0 {
             return;
         }
+        self.suppress_center_highlight = false;
+        self.keyboard_focused = true;
         if self.selected_offset_pinned {
             self.viewport_offset = self.viewport_offset.saturating_sub(1);
             if let Some(sel) = self.selected_offset {
@@ -318,6 +361,8 @@ impl SlotListView {
         if total_items == 0 {
             return;
         }
+        self.suppress_center_highlight = false;
+        self.keyboard_focused = true;
         if self.selected_offset_pinned {
             let max_idx = total_items - 1;
             self.viewport_offset = (self.viewport_offset + 1).min(max_idx);
@@ -337,6 +382,108 @@ impl SlotListView {
         self.viewport_offset = (self.viewport_offset + 1).min(total_items - 1);
     }
 
+    /// Scroll viewport up by one visible row (mouse wheel / touchpad) without
+    /// changing the selected item. If no item was selected prior to scrolling,
+    /// suppresses the fallback center highlight so scrolling does not select
+    /// rows as they pass through the middle of the viewport.
+    pub fn scroll_up(&mut self, total_items: usize) {
+        if total_items == 0 {
+            return;
+        }
+        self.selected_offset_pinned = false;
+        if self.selected_offset.is_none() {
+            if self.keyboard_focused {
+                self.selected_offset = Some(self.viewport_offset.min(total_items - 1));
+                self.keyboard_focused = false;
+            } else {
+                self.suppress_center_highlight = true;
+            }
+        }
+        self.viewport_offset = self.scroll_up_target(total_items);
+    }
+
+    /// Where [`Self::scroll_up`] would put the viewport, without moving it.
+    pub(crate) fn scroll_up_target(&self, total_items: usize) -> usize {
+        if total_items <= self.slot_count {
+            return 0;
+        }
+        let center_slot = self.slot_count / 2;
+        let max_center = total_items - (self.slot_count - center_slot);
+        let prev = if self.viewport_offset >= max_center {
+            max_center.saturating_sub(1)
+        } else {
+            self.viewport_offset.saturating_sub(1)
+        };
+        if prev <= center_slot { 0 } else { prev }
+    }
+
+    /// Where [`Self::scroll_down`] would put the viewport, without moving it.
+    pub(crate) fn scroll_down_target(&self, total_items: usize) -> usize {
+        if total_items <= self.slot_count {
+            return 0;
+        }
+        let center_slot = self.slot_count / 2;
+        let max_center = total_items - (self.slot_count - center_slot);
+        let next = if self.viewport_offset < center_slot {
+            center_slot + 1
+        } else {
+            self.viewport_offset + 1
+        };
+        if next >= max_center {
+            total_items - 1
+        } else {
+            next
+        }
+    }
+
+    /// Whether a wheel step up / down would move the viewport. Smooth
+    /// scrolling slides the rows only toward a direction that can follow.
+    pub(crate) fn can_scroll(&self, total_items: usize) -> (bool, bool) {
+        let scrolls = total_items > self.slot_count;
+        (
+            scrolls && self.scroll_up_target(total_items) != self.viewport_offset,
+            scrolls && self.scroll_down_target(total_items) != self.viewport_offset,
+        )
+    }
+
+    /// Scroll viewport down by one visible row (mouse wheel / touchpad) without
+    /// changing the selected item. If no item was selected prior to scrolling,
+    /// suppresses the fallback center highlight so scrolling does not select
+    /// rows as they pass through the middle of the viewport.
+    pub fn scroll_down(&mut self, total_items: usize) {
+        if total_items == 0 {
+            return;
+        }
+        self.selected_offset_pinned = false;
+        if self.selected_offset.is_none() {
+            if self.keyboard_focused {
+                self.selected_offset = Some(self.viewport_offset.min(total_items - 1));
+                self.keyboard_focused = false;
+            } else {
+                self.suppress_center_highlight = true;
+            }
+        }
+        self.viewport_offset = self.scroll_down_target(total_items);
+    }
+
+    /// Move viewport to a specific offset via scrollbar drag/click without
+    /// altering selection. Preserves `selected_offset` and `selected_indices`,
+    /// or suppresses the fallback center highlight if nothing was selected.
+    pub fn scroll_seek(&mut self, offset: usize, total_items: usize) {
+        if total_items > 0 && offset < total_items {
+            self.selected_offset_pinned = false;
+            if self.selected_offset.is_none() {
+                if self.keyboard_focused {
+                    self.selected_offset = Some(self.viewport_offset.min(total_items - 1));
+                    self.keyboard_focused = false;
+                } else {
+                    self.suppress_center_highlight = true;
+                }
+            }
+            self.viewport_offset = offset;
+        }
+    }
+
     /// Set viewport to specific offset (clears selected_offset and the pin).
     /// A plain click leaves its row as a one-row selection that is the focus
     /// marker; the jump drops that row with the marker, as `move_up` /
@@ -351,6 +498,8 @@ impl SlotListView {
                 self.anchor_index = None;
             }
             self.selected_offset_pinned = false;
+            self.suppress_center_highlight = false;
+            self.keyboard_focused = false;
         }
     }
 
@@ -361,6 +510,8 @@ impl SlotListView {
         if total_items > 0 && offset < total_items {
             self.selected_offset = Some(offset);
             self.selected_offset_pinned = false;
+            self.suppress_center_highlight = false;
+            self.keyboard_focused = false;
         }
     }
 
@@ -372,6 +523,8 @@ impl SlotListView {
         if total_items > 0 && offset < total_items {
             self.selected_offset = Some(offset);
             self.selected_offset_pinned = true;
+            self.suppress_center_highlight = false;
+            self.keyboard_focused = false;
         }
     }
 
@@ -396,6 +549,8 @@ impl SlotListView {
         self.selected_indices.clear();
         self.anchor_index = None;
         self.selected_offset = None;
+        self.suppress_center_highlight = false;
+        self.keyboard_focused = false;
     }
 
     /// Drop only the click-to-focus marker (`selected_offset`), leaving the
@@ -421,6 +576,8 @@ impl SlotListView {
     pub fn clear_selection_for_expand_prime(&mut self) {
         self.selected_indices.clear();
         self.selected_offset = None;
+        self.suppress_center_highlight = false;
+        self.keyboard_focused = false;
     }
 
     /// Record a scroll event for transient scrollbar animation.
@@ -452,12 +609,17 @@ impl SlotListView {
 
     /// The focused row: `selected_offset` when a row is highlighted off the
     /// centre (a click under Stable Viewport, or a find-and-expand pin),
-    /// otherwise the viewport's centre. It is the row the renderer draws as
-    /// focused, so every key and the artwork panel read this one.
+    /// otherwise the viewport's centre (unless suppressed by scrolling without
+    /// a selection). It is the row the renderer draws as focused, so every key
+    /// and the artwork panel read this one.
     pub fn get_effective_center_index(&self, total_items: usize) -> Option<usize> {
         self.selected_offset
             .filter(|&s| s < total_items)
-            .or_else(|| self.viewport_center_index(total_items))
+            .or_else(|| {
+                (!self.suppress_center_highlight)
+                    .then(|| self.viewport_center_index(total_items))
+                    .flatten()
+            })
     }
 
     /// Minimum extra items beyond the visible viewport to prefetch.
@@ -528,6 +690,75 @@ mod tests {
         assert_eq!(sl.get_slot_item_index_with_center(8, 5, center), Some(4)); // slot 8 = offset+4 = 4 -> valid
         assert_eq!(sl.get_slot_item_index_with_center(3, 5, center), None); // slot 3 = offset-1 = -1 -> out of range
         assert_eq!(sl.get_slot_item_index_with_center(5, 5, center), Some(1)); // slot 5 = offset+1 = 1 -> valid
+    }
+
+    #[test]
+    fn signed_slots_continue_the_mapping_one_row_past_each_edge() {
+        let mut sl = SlotListView::new();
+        sl.viewport_offset = 50;
+        let n = sl.slot_count;
+        let c = n / 2;
+        // 100 items, viewport mid-list: slot -1 / slot N are the rows around the page.
+        assert_eq!(
+            sl.slot_to_item_signed(-1, 100, n, c, false),
+            Some(50 - c - 1)
+        );
+        assert_eq!(
+            sl.slot_to_item_signed(n as isize, 100, n, c, false),
+            Some(50 - c + n)
+        );
+        // The in-range slots agree with the unsigned owner.
+        for slot in 0..n {
+            assert_eq!(
+                sl.slot_to_item_signed(slot as isize, 100, n, c, false),
+                sl.slot_to_item(slot, 100, n, c, false)
+            );
+        }
+    }
+
+    #[test]
+    fn signed_slots_past_the_list_ends_are_empty() {
+        let sl = SlotListView::new();
+        let (n, c) = (sl.slot_count, sl.slot_count / 2);
+        // At the top there is no row above slot 0.
+        assert_eq!(sl.slot_to_item_signed(-1, 100, n, c, false), None);
+        // A list that fits its slots has no extra rows at all.
+        assert_eq!(sl.slot_to_item_signed(-1, 3, n, c, false), None);
+        assert_eq!(sl.slot_to_item_signed(n as isize, 3, n, c, false), None);
+    }
+
+    #[test]
+    fn can_scroll_follows_the_viewport_and_the_list_length() {
+        let mut sl = SlotListView::new();
+        // Everything fits: nothing scrolls.
+        assert_eq!(sl.can_scroll(sl.slot_count), (false, false));
+        // At the top: only down.
+        assert_eq!(sl.can_scroll(100), (false, true));
+        sl.viewport_offset = 50;
+        assert_eq!(sl.can_scroll(100), (true, true));
+        sl.viewport_offset = 99;
+        assert_eq!(sl.can_scroll(100), (true, false));
+    }
+
+    #[test]
+    fn scroll_targets_match_what_scrolling_does() {
+        for total in [0_usize, 3, 9, 10, 40, 100] {
+            for start in [0, 1, 4, 5, 20, total.saturating_sub(1)] {
+                let mut sl = SlotListView::new();
+                sl.viewport_offset = start;
+                let (up, down) = (sl.scroll_up_target(total), sl.scroll_down_target(total));
+                let mut a = SlotListView::new();
+                a.viewport_offset = start;
+                a.scroll_up(total);
+                let mut b = SlotListView::new();
+                b.viewport_offset = start;
+                b.scroll_down(total);
+                if total > 0 {
+                    assert_eq!(a.viewport_offset, up, "up total={total} start={start}");
+                    assert_eq!(b.viewport_offset, down, "down total={total} start={start}");
+                }
+            }
+        }
     }
 
     #[test]

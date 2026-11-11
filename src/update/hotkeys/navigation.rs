@@ -157,7 +157,7 @@ impl Nokkvi {
         // before anything below could act on the hidden view (Settings'
         // drill-down, the split view, the search).
         if self.theater.active {
-            return self.exit_theater();
+            return self.exit_theater_animated();
         }
 
         // Settings has its own Escape handling — must be checked before the
@@ -278,7 +278,7 @@ impl Nokkvi {
         debug!(" [NAV] {key:?} on the highlighted {focus:?}: {action:?}");
         match action {
             NavFocusKey::Move(forward) => {
-                let next = focus.step(forward);
+                let next = focus.step(forward, &self.nav_tab_order());
                 if next != focus {
                     self.sfx_engine.play(audio::SfxType::Tab);
                 }

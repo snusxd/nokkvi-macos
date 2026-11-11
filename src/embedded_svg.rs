@@ -135,6 +135,7 @@ const NAME_MAP: &[(&str, &str)] = &[
         "minimize-2",
         "assets/icons-phosphor/arrows-in-simple-regular.svg",
     ),
+    ("minus", "assets/icons-phosphor/minus-regular.svg"),
     ("monitor", "assets/icons-phosphor/monitor-regular.svg"),
     ("mouse-pointer", "assets/icons-phosphor/cursor-regular.svg"),
     ("music", "assets/icons-phosphor/music-note-regular.svg"),

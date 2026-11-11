@@ -403,6 +403,14 @@ define_hotkey_actions! {
             settings_key: "hotkey.toggle_browsing_panel",
             default: KeyCombo::ctrl(KeyCode::Char('e')),
         },
+        ToggleNowPlayingSidebar {
+            display: "Now Playing Sidebar",
+            description: "Show or hide the sidebar with the playing track's title, artist and album",
+            category: "Navigation",
+            toml_key: "toggle_now_playing_sidebar",
+            settings_key: "hotkey.toggle_now_playing_sidebar",
+            default: KeyCombo::ctrl(KeyCode::Char('b')),
+        },
         CenterOnPlaying {
             display: "Center on Playing",
             description: "Scroll to the currently playing track",

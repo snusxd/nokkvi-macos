@@ -77,11 +77,20 @@ pub(super) fn built(app: &mut Nokkvi, generation: u64, result: Result<(), String
 }
 
 #[test]
-fn cycle_reaches_milkdrop_after_scope_and_wraps_to_off() {
+fn cycle_reaches_milkdrop_after_scope_and_moves_on_to_cover_beat() {
     let mut app = md_app();
     app.settings.visualization_mode = VisualizationMode::Scope;
     cycle(&mut app);
     assert_eq!(app.settings.visualization_mode, VisualizationMode::Milkdrop);
+    cycle(&mut app);
+    assert_eq!(
+        app.settings.visualization_mode,
+        VisualizationMode::CoverBeat
+    );
+    assert!(
+        !app.milkdrop.shared.running.load(Ordering::Acquire),
+        "leaving MilkDrop for Cover Beat stops the presets"
+    );
     cycle(&mut app);
     assert_eq!(app.settings.visualization_mode, VisualizationMode::Off);
 }

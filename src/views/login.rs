@@ -393,7 +393,7 @@ fn input_field<'a>(
 ) -> iced::widget::Column<Element<'a, LoginMessage>> {
     column![
         text(label)
-            .size(13)
+            .size(crate::theme::fs(13))
             .font(theme::ui_font())
             .color(theme::fg1()),
         text_input(placeholder, value)
@@ -475,14 +475,14 @@ impl LoginPage {
             .height(Length::Fixed(logo_px));
 
         let title = text("Nokkvi")
-            .size(title_px)
+            .size(crate::theme::fs(title_px))
             .color(theme::fg0())
             .width(Length::Fill)
             .align_x(Alignment::Center)
             .font(theme::weighted_ui_font(iced::font::Weight::Bold));
 
         let subtitle = text("A sturdy hull for the endless stream.")
-            .size(14)
+            .size(crate::theme::fs(14))
             .font(iced::font::Font {
                 style: iced::font::Style::Italic,
                 ..theme::ui_font()
@@ -518,7 +518,7 @@ impl LoginPage {
         if nokkvi_data::utils::server_url::is_cleartext_http_url(&self.server_url) {
             server_block = server_block.push(
                 text("Unencrypted connection. Credentials will be sent in clear text.")
-                    .size(11)
+                    .size(crate::theme::fs(11))
                     .font(theme::ui_font())
                     .color(theme::warning())
                     .width(Length::Fill)
@@ -552,7 +552,7 @@ impl LoginPage {
             form = form.push(
                 text(&err.message)
                     .color(theme::danger_bright())
-                    .size(13)
+                    .size(crate::theme::fs(13))
                     .font(theme::ui_font())
                     .width(Length::Fill)
                     .align_x(Alignment::Center)
@@ -567,7 +567,7 @@ impl LoginPage {
                      You're signed in as soon as it lifts.",
                 )
                 .color(theme::fg2())
-                .size(13)
+                .size(crate::theme::fs(13))
                 .font(theme::ui_font())
                 .width(Length::Fill)
                 .align_x(Alignment::Center)
@@ -621,7 +621,7 @@ impl LoginPage {
     fn version_label<'a>() -> Element<'a, LoginMessage> {
         container(
             text(format!("v{}", env!("CARGO_PKG_VERSION")))
-                .size(12)
+                .size(crate::theme::fs(12))
                 .font(theme::ui_font())
                 .color(theme::fg4()),
         )

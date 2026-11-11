@@ -130,6 +130,7 @@ fn playlist_strip_artwork_layout(
         window_height,
         show_artwork_column: true,
         slot_list_chrome: 0.0,
+        header_reserve: None,
         bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
     })
 }
@@ -216,6 +217,9 @@ pub struct QueueChromeInputs<'a> {
     /// Auto-hide collapse state, with an open header menu (columns cog or
     /// server sync) holding the toolbar expanded.
     pub toolbar_collapsed: bool,
+    /// Auto-hide is on: the header (detail block included) is drawn over the
+    /// list's bottom, so the chrome is always the collapsed band.
+    pub toolbar_overlay: bool,
     /// The active playlist's comment; `None` = no playlist identity in the
     /// toolbar.
     pub playlist_comment: Option<&'a str>,
@@ -225,6 +229,21 @@ pub struct QueueChromeInputs<'a> {
     pub strip_expanded: bool,
     /// Whether the multi-select column's select-all bar is showing.
     pub select_visible: bool,
+}
+
+/// Band the queue's layout keeps for its header when auto-hide draws it over
+/// the list: the collapsed strip plus the select-all bar riding under it.
+pub(crate) fn queue_header_reserve(inputs: &QueueChromeInputs<'_>) -> Option<f32> {
+    use crate::widgets::slot_list::{SELECT_HEADER_HEIGHT, collapsed_view_header_chrome};
+
+    inputs.toolbar_overlay.then(|| {
+        collapsed_view_header_chrome()
+            + if inputs.select_visible {
+                SELECT_HEADER_HEIGHT
+            } else {
+                0.0
+            }
+    })
 }
 
 /// Total slot-list chrome for the queue view, before the vertical artwork:
@@ -241,9 +260,10 @@ pub(crate) fn queue_chrome_height(inputs: &QueueChromeInputs<'_>) -> f32 {
         view_header::HEADER_BOTTOM_SEPARATOR,
     };
 
-    let mut chrome = chrome_height_with_header(inputs.toolbar_collapsed);
+    let mut chrome = chrome_height_with_header(inputs.toolbar_collapsed || inputs.toolbar_overlay);
     if let Some(comment) = inputs.playlist_comment
         && inputs.strip_expanded
+        && !inputs.toolbar_overlay
     {
         let width = playlist_strip_comment_width(inputs);
         chrome += HEADER_BOTTOM_SEPARATOR + playlist_strip_detail(comment, width).1;
@@ -274,6 +294,7 @@ pub(crate) fn queue_effective_chrome(inputs: &QueueChromeInputs<'_>) -> f32 {
         window_height: inputs.window_height,
         show_artwork_column: true,
         slot_list_chrome: chrome,
+        header_reserve: None,
         bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
     };
     chrome + vertical_artwork_chrome(&layout)
@@ -574,7 +595,7 @@ impl QueuePage {
                 let tooltip_text = |label: String| {
                     container(
                         iced::widget::text(label)
-                            .size(11.0)
+                            .size(crate::theme::fs(11.0))
                             .font(crate::theme::ui_font()),
                     )
                     .padding(4)
@@ -607,7 +628,7 @@ impl QueuePage {
                     };
                     let name = iced::widget::text(ctx.name.clone())
                         .font(crate::theme::weighted_ui_font(iced::font::Weight::Medium))
-                        .size(size)
+                        .size(crate::theme::fs(size))
                         .color(color)
                         .wrapping(iced::widget::text::Wrapping::None)
                         .ellipsis(iced::widget::text::Ellipsis::End);
@@ -671,7 +692,7 @@ impl QueuePage {
                                     }),
                                 iced::widget::text(label)
                                     .font(crate::theme::ui_font())
-                                    .size(11)
+                                    .size(crate::theme::fs(11))
                                     .color(crate::theme::fg3()),
                             ]
                             .spacing(5)
@@ -724,7 +745,7 @@ impl QueuePage {
                                 }),
                             iced::widget::text(chip_text)
                                 .font(crate::theme::ui_font())
-                                .size(10.5)
+                                .size(crate::theme::fs(10.5))
                                 .color(crate::theme::fg2()),
                         ]
                         .spacing(4)
@@ -753,7 +774,7 @@ impl QueuePage {
                         } else {
                             let comment_text = iced::widget::text(playlist_comment_display)
                                 .font(crate::theme::ui_font())
-                                .size(12)
+                                .size(crate::theme::fs(12))
                                 .color(crate::theme::fg2());
                             column![comment_text, meta_row].spacing(8).boxed()
                         };
@@ -820,6 +841,7 @@ impl QueuePage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome: chrome_height,
+            header_reserve: queue_header_reserve(&data.chrome),
             bleed: data.bleed,
         };
 
@@ -1163,6 +1185,14 @@ impl QueuePage {
                 crate::widgets::base_slot_list_layout::ArtworkPlaceholder::Blank
             },
             crate::widgets::base_slot_list_layout::PanelShape::FollowColumnMode,
+            crate::widgets::beat_scale::CoverScale {
+                factor: if cover_is_now_playing {
+                    data.cover_beat_scale
+                } else {
+                    1.0
+                },
+                overflow: false,
+            },
             panel_menu_entries,
             artwork_menu_open,
             artwork_menu_position,

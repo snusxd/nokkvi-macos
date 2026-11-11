@@ -1,8 +1,17 @@
 //! UI font configuration — independent of theme, stored in config.toml.
 
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{
+        LazyLock,
+        atomic::{AtomicI16, AtomicU16, Ordering},
+    },
+};
 
-use iced::{Font, font::Weight};
+use iced::{Font, Pixels, font::Weight};
+use nokkvi_data::types::player_settings::{
+    FONT_SIZE_PX_DEFAULT, FONT_SIZE_PX_MAX, FONT_SIZE_PX_MIN, FontWeight,
+};
 use parking_lot::RwLock;
 
 // ============================================================================
@@ -13,10 +22,62 @@ use parking_lot::RwLock;
 /// don't change the user's font preference.
 static FONT_FAMILY: LazyLock<RwLock<String>> = LazyLock::new(|| RwLock::new(String::new()));
 
+/// UI font size in px (14 is the designed size). Read on every text run.
+static FONT_SIZE_PX: AtomicU16 = AtomicU16::new(FONT_SIZE_PX_DEFAULT as u16);
+
+/// CSS-weight shift of the base font weight ([`FontWeight::css_shift`]).
+static FONT_WEIGHT_SHIFT: AtomicI16 = AtomicI16::new(0);
+
+/// Scale a designed text size by the user's Font Size. Every text run takes its
+/// size through this, so one setting moves the whole UI; row heights and
+/// chrome are fixed, so text grows or shrinks inside them.
+#[inline]
+pub(crate) fn fs(designed: impl Into<Pixels>) -> Pixels {
+    let px = FONT_SIZE_PX.load(Ordering::Relaxed);
+    Pixels(designed.into().0 * f32::from(px) / FONT_SIZE_PX_DEFAULT as f32)
+}
+
+/// Set the font size in px (clamped to the setting's range).
+pub(crate) fn set_font_size_px(px: u32) {
+    let px = px.clamp(FONT_SIZE_PX_MIN, FONT_SIZE_PX_MAX);
+    FONT_SIZE_PX.store(px as u16, Ordering::Relaxed);
+}
+
+/// The current font size in px (for the settings UI).
+pub(crate) fn font_size_px() -> u32 {
+    u32::from(FONT_SIZE_PX.load(Ordering::Relaxed))
+}
+
+/// Set the base font weight.
+pub(crate) fn set_font_weight(weight: FontWeight) {
+    FONT_WEIGHT_SHIFT.store(weight.css_shift() as i16, Ordering::Relaxed);
+}
+
+/// The current base font weight (for the settings UI).
+pub(crate) fn font_weight() -> FontWeight {
+    match FONT_WEIGHT_SHIFT.load(Ordering::Relaxed) {
+        s if s == FontWeight::Light.css_shift() as i16 => FontWeight::Light,
+        s if s == FontWeight::Medium.css_shift() as i16 => FontWeight::Medium,
+        s if s == FontWeight::Bold.css_shift() as i16 => FontWeight::Bold,
+        _ => FontWeight::Regular,
+    }
+}
+
+/// `requested` moved by the base weight step, clamped to the CSS scale and
+/// snapped to a hundred. With the default (Regular) it is `requested` itself.
+fn shifted_weight(requested: Weight) -> Weight {
+    let shift = i32::from(FONT_WEIGHT_SHIFT.load(Ordering::Relaxed));
+    if shift == 0 {
+        return requested;
+    }
+    let css = (i32::from(weight_to_css(requested)) + shift).clamp(100, 900);
+    css_to_weight(css as u16)
+}
+
 /// Cached font storage to avoid leaking memory on every reload.
-/// Stores (font_name, resolved_font) pairs.
-static FONT_CACHE: LazyLock<RwLock<(String, Font)>> =
-    LazyLock::new(|| RwLock::new((String::new(), Font::DEFAULT)));
+/// Stores (font_name, base weight shift, resolved_font).
+static FONT_CACHE: LazyLock<RwLock<(String, i16, Font)>> =
+    LazyLock::new(|| RwLock::new((String::new(), 0, Font::DEFAULT)));
 
 /// The line height of every text site. iced's own widgets read it from the
 /// daemon `Settings` (set in `main`); nokkvi's custom text widgets name it
@@ -32,25 +93,30 @@ pub(crate) const UI_LINE_HEIGHT: iced::widget::text::LineHeight =
 #[inline]
 pub(crate) fn ui_font() -> Font {
     let current_family = { FONT_FAMILY.read().clone() };
+    let shift = FONT_WEIGHT_SHIFT.load(Ordering::Relaxed);
 
     // Fast path: check if cached font matches current config
     {
         let cache = FONT_CACHE.read();
-        if cache.0 == current_family {
-            return cache.1;
+        if cache.0 == current_family && cache.1 == shift {
+            return cache.2;
         }
     }
 
-    // Slow path: font changed, update cache
-    let new_font = if current_family.is_empty() {
+    // Slow path: font or base weight changed, update cache
+    let base = if current_family.is_empty() {
         Font::DEFAULT
     } else {
         // Family::name() interns the string in a global FxHashSet (leaked once, deduped)
         Font::with_family(iced::font::Family::name(&current_family))
     };
+    let new_font = Font {
+        weight: weighted_weight(&current_family, Weight::Normal),
+        ..base
+    };
 
     let mut cache = FONT_CACHE.write();
-    *cache = (current_family, new_font);
+    *cache = (current_family, shift, new_font);
 
     new_font
 }
@@ -163,14 +229,30 @@ pub(crate) fn weighted_ui_font(weight: Weight) -> Font {
         // No custom font: the default look relies on iced's bundled Fira Sans
         // plus nokkvi's bundled Medium/Bold faces, which cover these weights.
         return Font {
-            weight,
+            weight: shifted_weight(weight),
             ..Font::DEFAULT
         };
     }
     Font {
-        weight: effective_weight(&family, weight),
-        ..ui_font()
+        weight: weighted_weight(&family, weight),
+        ..ui_font_family(&family)
     }
+}
+
+/// The base weight step applied to `requested`, then down-graded to what
+/// `family` ships (an empty family is the bundled default: no down-grade).
+fn weighted_weight(family: &str, requested: Weight) -> Weight {
+    let shifted = shifted_weight(requested);
+    if family.is_empty() {
+        shifted
+    } else {
+        effective_weight(family, shifted)
+    }
+}
+
+/// The face for a named family at its default weight, no weight applied.
+fn ui_font_family(family: &str) -> Font {
+    Font::with_family(iced::font::Family::name(family))
 }
 
 /// Like [`weighted_ui_font`] but for an explicit `family` — the font picker

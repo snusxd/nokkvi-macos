@@ -11,7 +11,8 @@ import re
 import subprocess
 import sys
 
-RULES = pathlib.Path(".claude/rules")
+from rule_globs import RULES, expand_braces, frontmatter_paths, glob_regex
+
 # Sizes are bytes. A path-scoped file costs this much in every session that
 # touches one of its globs; the harness's own size warning only looks at the
 # always-loaded files, so nothing else flags a rule file that keeps growing.
@@ -29,40 +30,6 @@ def fail(msg):
     global failed
     failed = True
     print(f"FAIL  {msg}")
-
-
-def expand_braces(pattern):
-    m = re.search(r"\{([^{}]*)\}", pattern)
-    if not m:
-        return [pattern]
-    head, tail = pattern[: m.start()], pattern[m.end():]
-    return [x for alt in m.group(1).split(",") for x in expand_braces(head + alt + tail)]
-
-
-def glob_regex(pattern):
-    out, i = "", 0
-    while i < len(pattern):
-        if pattern.startswith("**/", i):
-            out, i = out + "(?:.*/)?", i + 3
-        elif pattern.startswith("**", i):
-            out, i = out + ".*", i + 2
-        elif pattern[i] == "*":
-            out, i = out + "[^/]*", i + 1
-        elif pattern[i] == "?":
-            out, i = out + "[^/]", i + 1
-        else:
-            out, i = out + re.escape(pattern[i]), i + 1
-    return re.compile(f"^{out}$")
-
-
-def frontmatter_paths(text):
-    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
-    if not m:
-        return None
-    return [
-        g.strip().strip("'\"")
-        for g in re.findall(r"^\s*-\s*(.+?)\s*$", m.group(1), re.M)
-    ]
 
 
 def anchors(path):

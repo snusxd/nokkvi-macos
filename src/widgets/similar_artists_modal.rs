@@ -129,7 +129,7 @@ pub(crate) fn similar_artists_modal_overlay<'a>(
         }
     };
     let who = text(format!("to {}", state.artist_name))
-        .size(13.0)
+        .size(crate::theme::fs(13.0))
         .font(theme::ui_font())
         .color(theme::fg2())
         .wrapping(iced::widget::text::Wrapping::None);
@@ -208,7 +208,7 @@ fn render_row<'a>(
         Weight::Medium
     };
     let title = text(rec.name.clone())
-        .size(14.0)
+        .size(crate::theme::fs(14.0))
         .font(theme::weighted_ui_font(weight))
         .color(label_color)
         .wrapping(iced::widget::text::Wrapping::None);
@@ -218,7 +218,7 @@ fn render_row<'a>(
     if let Some(comment) = &rec.comment {
         subtitle = subtitle.push(
             text(format!("{comment} · "))
-                .size(11.0)
+                .size(crate::theme::fs(11.0))
                 .font(theme::ui_font())
                 .color(note_color)
                 .wrapping(iced::widget::text::Wrapping::None)
@@ -227,7 +227,7 @@ fn render_row<'a>(
     }
     subtitle = subtitle.push(
         text(standing_text)
-            .size(11.0)
+            .size(crate::theme::fs(11.0))
             .font(theme::ui_font())
             .color(standing_color)
             .wrapping(iced::widget::text::Wrapping::None)
@@ -235,7 +235,7 @@ fn render_row<'a>(
     );
     subtitle = subtitle.push(
         text(format!(" · {}", rec.source.label()))
-            .size(11.0)
+            .size(crate::theme::fs(11.0))
             .font(theme::ui_font())
             .color(note_color)
             .wrapping(iced::widget::text::Wrapping::None)

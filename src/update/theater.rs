@@ -17,8 +17,112 @@ use nokkvi_data::types::{hotkey_config::HotkeyAction, player_settings::TheaterCo
 use crate::{
     Nokkvi, Screen,
     app_message::{ArtworkMessage, Message, TheaterMessage},
-    state::{ChromeMotion, TheaterState},
+    state::{ChromeMotion, OldLyrics, Reveal, RevealKind, RollDirection, TheaterState, TrackRoll},
 };
+
+/// Id the Now Playing sidebar's cover is tagged with (`BoundsTag`): entering
+/// Theater Mode reads where it sits and moves it into the theater layout.
+pub(crate) const SIDEBAR_COVER_TAG: &str = "now-playing-sidebar-cover";
+
+/// How long the panel takes to grow to the window or shrink back.
+pub(crate) const REVEAL_DURATION: Duration = Duration::from_millis(420);
+
+/// How long a track change takes to roll the cover and the lyrics over.
+pub(crate) const ROLL_DURATION: Duration = Duration::from_millis(520);
+
+/// Smooth start and stop: a cubic ease-in-out over `0..=1`.
+pub(crate) fn ease_in_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+/// How far the panel is from its resting place (the cover, or below the
+/// window) toward filling the window: `0.0` at rest, `1.0` full. `None` while
+/// an entry still waits for the cover's bounds.
+pub(crate) fn reveal_fill(reveal: &Reveal, now: Instant) -> Option<f32> {
+    let since = reveal.since?;
+    let t = (now.saturating_duration_since(since).as_secs_f32() / REVEAL_DURATION.as_secs_f32())
+        .clamp(0.0, 1.0);
+    let eased = ease_in_out_cubic(t);
+    Some(match reveal.kind {
+        RevealKind::Enter => eased,
+        RevealKind::Leave => 1.0 - eased,
+    })
+}
+
+/// `from` moved `t` of the way to `to` (`0.0` = `from`, `1.0` = `to`).
+pub(crate) fn lerp_rect(from: iced::Rectangle, to: iced::Rectangle, t: f32) -> iced::Rectangle {
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    iced::Rectangle {
+        x: lerp(from.x, to.x),
+        y: lerp(from.y, to.y),
+        width: lerp(from.width, to.width),
+        height: lerp(from.height, to.height),
+    }
+}
+
+/// The whole theater layout's rectangle at `fill` while it rises from just
+/// below the window at full size (no sidebar cover to leave from): `fill`
+/// `0.0` is below the window, `1.0` is the window.
+pub(crate) fn rising_rect(window: iced::Size, fill: f32) -> iced::Rectangle {
+    lerp_rect(
+        iced::Rectangle::new(iced::Point::new(0.0, window.height), window),
+        iced::Rectangle::new(iced::Point::ORIGIN, window),
+        fill,
+    )
+}
+
+/// Where Theater Mode puts its two parts in a `window`: the square cover on
+/// the left and, when there are lyrics to show, their column to its right.
+/// Without lyrics the cover is centered alone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TheaterGeometry {
+    pub cover: iced::Rectangle,
+    pub lyrics: Option<iced::Rectangle>,
+}
+
+/// Narrowest lyrics column worth drawing; a window too narrow for it shows the
+/// cover alone.
+const MIN_LYRICS_WIDTH: f32 = 220.0;
+
+/// [`TheaterGeometry`] for `window`. The margin is a twelfth of the shorter
+/// side (at least 24 px); the cover takes the largest square that leaves the
+/// lyrics column about as wide as the cover.
+pub(crate) fn theater_geometry(window: iced::Size, with_lyrics: bool) -> TheaterGeometry {
+    let margin = (window.width.min(window.height) / 12.0).max(24.0);
+    let avail_h = (window.height - 2.0 * margin).max(1.0);
+    if with_lyrics {
+        let side = avail_h.min((window.width - 3.0 * margin) / 2.0);
+        let lyrics_x = 2.0 * margin + side;
+        let lyrics_w = window.width - lyrics_x - margin;
+        if side > 0.0 && lyrics_w >= MIN_LYRICS_WIDTH {
+            return TheaterGeometry {
+                cover: iced::Rectangle::new(
+                    iced::Point::new(margin, (window.height - side) / 2.0),
+                    iced::Size::new(side, side),
+                ),
+                // The column runs the window's full height; the lyrics scroll
+                // under it edge to edge.
+                lyrics: Some(iced::Rectangle::new(
+                    iced::Point::new(lyrics_x, 0.0),
+                    iced::Size::new(lyrics_w, window.height),
+                )),
+            };
+        }
+    }
+    let side = avail_h.min((window.width - 2.0 * margin).max(1.0));
+    TheaterGeometry {
+        cover: iced::Rectangle::new(
+            iced::Point::new((window.width - side) / 2.0, (window.height - side) / 2.0),
+            iced::Size::new(side, side),
+        ),
+        lyrics: None,
+    }
+}
 
 /// Idle time before the auto-hiding bar (and the cursor) leave; the same
 /// hold as the auto-hide toolbar's hotkey reveal.
@@ -102,6 +206,23 @@ pub(crate) fn cursor_hidden(state: &TheaterState, now: Instant, menu_open: bool)
 /// changed, recording the offset it leaves from. The only place the chrome
 /// flips.
 pub(crate) fn tick(app: &mut Nokkvi, now: Instant) {
+    if app
+        .theater
+        .roll
+        .as_ref()
+        .is_some_and(|roll| now.saturating_duration_since(roll.since) >= ROLL_DURATION)
+    {
+        app.theater.roll = None;
+    }
+    // The enter / leave animation ends on its own clock, also after a leave
+    // (theater is no longer active then).
+    if let Some(reveal) = app.theater.reveal
+        && reveal
+            .since
+            .is_some_and(|since| now.saturating_duration_since(since) >= REVEAL_DURATION)
+    {
+        app.theater.reveal = None;
+    }
     if !app.theater.active {
         return;
     }
@@ -181,6 +302,7 @@ pub(crate) fn theater_key_policy(action: HotkeyAction) -> TheaterKeyPolicy {
         | A::SwitchToSettings
         | A::FocusSearch
         | A::ToggleBrowsingPanel
+        | A::ToggleNowPlayingSidebar
         | A::CenterOnPlaying
         | A::OpenTrawl
         | A::Roulette
@@ -252,12 +374,25 @@ impl Nokkvi {
     pub(crate) fn handle_theater(&mut self, msg: TheaterMessage) -> Task<Message> {
         match msg {
             TheaterMessage::Toggle => self.toggle_theater(),
-            TheaterMessage::Exit => self.exit_theater(),
+            TheaterMessage::Exit => self.exit_theater_animated(),
             TheaterMessage::Activity => {
                 self.stamp_theater_activity();
                 Task::none()
             }
             TheaterMessage::PriorModeKnown(id, prior) => self.handle_prior_window_mode(id, prior),
+            TheaterMessage::CoverBounds(rect) => {
+                // Only the entry that asked: a fast exit may already have
+                // dropped the pending reveal.
+                if let Some(reveal) = self.theater.reveal.as_mut()
+                    && reveal.kind == RevealKind::Enter
+                    && reveal.since.is_none()
+                {
+                    reveal.since = Some(Instant::now());
+                    reveal.rect = rect;
+                    self.theater.cover_rect = rect;
+                }
+                Task::none()
+            }
             TheaterMessage::CornerHover(hovered) => {
                 if self.theater.active {
                     self.theater.corner_hovered = hovered;
@@ -277,7 +412,7 @@ impl Nokkvi {
 
     pub(crate) fn toggle_theater(&mut self) -> Task<Message> {
         if self.theater.active {
-            self.exit_theater()
+            self.exit_theater_animated()
         } else {
             self.enter_theater()
         }
@@ -293,6 +428,13 @@ impl Nokkvi {
             return Task::none();
         }
         self.theater.active = true;
+        // The panel grows from the Queue's cover once its bounds are read.
+        self.theater.reveal = Some(Reveal {
+            kind: RevealKind::Enter,
+            since: None,
+            rect: None,
+        });
+        self.theater.cover_rect = None;
         let now = Instant::now();
         self.theater.last_activity = Some(now);
         self.theater.bar_hovered = false;
@@ -329,8 +471,11 @@ impl Nokkvi {
 
         // Theater may be entered from a view that is not a lyrics surface, so
         // the playing track's cover and lyrics may never have been fetched.
+        let cover_probe = crate::widgets::bounds_tag::probe_bounds(&[SIDEBAR_COVER_TAG])
+            .map(|rect| Message::Theater(TheaterMessage::CoverBounds(rect)));
         Task::batch([
             window_mode,
+            cover_probe,
             self.theater_large_art_task().unwrap_or_else(Task::none),
             self.lyrics_kick_if_unresolved(),
         ])
@@ -352,6 +497,44 @@ impl Nokkvi {
             }
             _ => Task::none(),
         }
+    }
+
+    /// Leave theater with the panel shrinking back to the cover it grew from
+    /// (or sinking below the window). Only for exits that land on the view
+    /// theater was entered from: Escape, the toggle key, the exit icon and the
+    /// panel's menu row. An exit that goes on to change the view (a key that
+    /// leaves and then acts) stays instant, so no panel animates over a
+    /// different layout.
+    pub(crate) fn exit_theater_animated(&mut self) -> Task<Message> {
+        let was_active = self.theater.active;
+        let rect = self.theater.cover_rect;
+        let now = Instant::now();
+        // Leaving while the panel is still growing turns it around from where
+        // it is: the cubic is symmetric, so a leave that has run for
+        // `D * (1 - t)` sits where an enter that has run for `D * t` stood.
+        let since = match self.theater.reveal {
+            Some(Reveal {
+                kind: RevealKind::Enter,
+                since: Some(started),
+                ..
+            }) => {
+                let t = (now.saturating_duration_since(started).as_secs_f32()
+                    / REVEAL_DURATION.as_secs_f32())
+                .clamp(0.0, 1.0);
+                now.checked_sub(REVEAL_DURATION.mul_f32(1.0 - t))
+                    .unwrap_or(now)
+            }
+            _ => now,
+        };
+        let task = self.exit_theater();
+        if was_active {
+            self.theater.reveal = Some(Reveal {
+                kind: RevealKind::Leave,
+                since: Some(since),
+                rect,
+            });
+        }
+        task
     }
 
     /// Keep the bar and the cursor on screen for another [`HIDE_DELAY`].
@@ -397,6 +580,7 @@ impl Nokkvi {
     /// normally.
     pub(crate) fn exit_theater_for_closing_window(&mut self) {
         self.theater.prior_window_mode = None;
+        self.theater.reveal = None;
         self.leave_theater_state();
     }
 
@@ -407,6 +591,8 @@ impl Nokkvi {
             return false;
         }
         self.theater.active = false;
+        self.theater.reveal = None;
+        self.theater.roll = None;
         // The bar unmounts, so its `on_exit` may never fire.
         self.theater.bar_hovered = false;
         self.theater.corner_hovered = false;
@@ -506,16 +692,70 @@ impl Nokkvi {
                 Some(&station.id),
             );
         }
-        let blurred = if self.queue_lyrics_panel_data().is_some() {
-            self.lyrics_blurred_cover_for_view()
-        } else {
-            None
-        };
+        // The lyrics have their own column beside the cover, so the cover is
+        // never the frosted backdrop.
         theater_cover(
             &self.artwork.large_artwork.snapshot,
             &self.artwork.album_art.snapshot,
-            blurred,
+            None,
             self.current_queue_song_cover_key(),
         )
+    }
+}
+
+impl Nokkvi {
+    /// A queue track change while Theater Mode shows: start rolling the cover
+    /// and the lyrics over. Called with `scrobble.current_song_id` still naming
+    /// the OLD song, so the cover resolved now is the one rolling out. The
+    /// direction follows the queue order: a landing earlier in the queue than
+    /// the song left is a Previous, anything else a Next. No roll while the
+    /// panel is still entering or leaving (its own animation runs).
+    pub(crate) fn begin_theater_roll(&mut self, new_id: Option<&str>) {
+        if !self.theater.active || self.theater.reveal.is_some() {
+            return;
+        }
+        let Some(old_id) = self.scrobble.current_song_id.as_deref() else {
+            return;
+        };
+        let position = |id: &str| self.library.queue_songs.iter().position(|s| s.id == id);
+        let direction = match (position(old_id), new_id.and_then(position)) {
+            (Some(old), Some(new)) if new < old => RollDirection::Previous,
+            _ => RollDirection::Next,
+        };
+        self.theater.roll = Some(TrackRoll {
+            since: Instant::now(),
+            direction,
+            old_cover: self.theater_now_playing_cover().cloned(),
+            // The sheet on screen now fades out as the next one fades in; read
+            // before the lyrics handler clears or promotes it.
+            old_lyrics: self.queue_lyrics_panel_data().map(|lyrics| OldLyrics {
+                lines: lyrics.lines.to_vec(),
+                synced: lyrics.synced,
+                center: crate::widgets::lyrics_viewport::lyrics_center_pos(),
+            }),
+        });
+    }
+
+    /// The roll's `(direction, eased progress 0..=1)` at `now`, if one runs.
+    pub(crate) fn theater_roll_progress(&self, now: Instant) -> Option<(RollDirection, f32)> {
+        let roll = self.theater.roll.as_ref()?;
+        let t = (now.saturating_duration_since(roll.since).as_secs_f32()
+            / ROLL_DURATION.as_secs_f32())
+        .clamp(0.0, 1.0);
+        Some((roll.direction, ease_in_out_cubic(t)))
+    }
+}
+
+/// How far (in px) the outgoing piece sits from rest, and the incoming piece
+/// from where it comes in, when the roll is `progress` along: along the
+/// vertical axis with a travel of `distance`. `Next` carries things up (the
+/// old piece off the top, the new one rising from below, as a list scrolls
+/// forward), `Previous` down.
+pub(crate) fn roll_offsets(direction: RollDirection, progress: f32, distance: f32) -> (f32, f32) {
+    let outgoing = -progress * distance;
+    let incoming = (1.0 - progress) * distance;
+    match direction {
+        RollDirection::Next => (outgoing, incoming),
+        RollDirection::Previous => (-outgoing, -incoming),
     }
 }

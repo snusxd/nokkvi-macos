@@ -197,7 +197,7 @@ impl PlaylistEditorState {
 
         let eyebrow = text("SMART PLAYLIST — RULES")
             .font(theme::weighted_ui_font(iced::font::Weight::Semibold))
-            .size(9.5)
+            .size(crate::theme::fs(9.5))
             .color(theme::accent())
             .wrapping(iced::widget::text::Wrapping::None);
 
@@ -213,7 +213,7 @@ impl PlaylistEditorState {
                     .id(RULES_NAME_INPUT_ID)
                     .on_input(|s| Message::Editor(EditorMessage::NameChanged(s)))
                     .font(theme::weighted_ui_font(iced::font::Weight::Bold))
-                    .size(14)
+                    .size(crate::theme::fs(14))
                     .width(Length::Fill)
                     .padding([2, 4])
                     .style(bar_input_style)
@@ -228,7 +228,7 @@ impl PlaylistEditorState {
                     .id(RULES_COMMENT_INPUT_ID)
                     .on_input(|s| Message::Editor(EditorMessage::CommentChanged(s)))
                     .font(theme::ui_font())
-                    .size(11)
+                    .size(crate::theme::fs(11))
                     .width(Length::Fill)
                     .padding([2, 4])
                     .style(bar_input_style)
@@ -368,12 +368,12 @@ fn results_pane<'a>(
     let header = container(
         row![
             text("PREVIEW")
-                .size(9.5)
+                .size(crate::theme::fs(9.5))
                 .font(theme::weighted_ui_font(iced::font::Weight::Semibold))
                 .color(theme::accent())
                 .wrapping(iced::widget::text::Wrapping::None),
             text(header_text)
-                .size(11)
+                .size(crate::theme::fs(11))
                 .font(theme::ui_font())
                 .color(theme::fg3()),
             Space::new().width(Length::Fill),
@@ -430,7 +430,7 @@ fn results_pane<'a>(
                 rows_col = rows_col.push(
                     container(
                         text("Couldn't refresh — Re-evaluate to retry")
-                            .size(11)
+                            .size(crate::theme::fs(11))
                             .font(theme::ui_font())
                             .color(theme::warning()),
                     )
@@ -476,13 +476,13 @@ fn preview_row<'a>(
     // title/artist with "…" at the (clipped, bounded) column edge instead of
     // overflowing into the trailing columns — the slot_list_text recipe.
     let title = text(&song.title)
-        .size(12.5)
+        .size(crate::theme::fs(12.5))
         .font(theme::ui_font())
         .color(theme::fg0())
         .wrapping(iced::widget::text::Wrapping::None)
         .ellipsis(iced::widget::text::Ellipsis::End);
     let meta = text(format!("{} · {}", song.artist, song.album))
-        .size(10.5)
+        .size(crate::theme::fs(10.5))
         .font(theme::ui_font())
         .color(theme::fg3())
         .wrapping(iced::widget::text::Wrapping::None)
@@ -603,7 +603,7 @@ fn preview_love_cell<'a>(starred: bool) -> Element<'a, Message> {
 fn preview_plays_cell<'a>(play_count: Option<u32>) -> Element<'a, Message> {
     container(
         text(format!("{} plays", play_count.unwrap_or(0)))
-            .size(11)
+            .size(crate::theme::fs(11))
             .font(theme::ui_font())
             .color(theme::fg3())
             .wrapping(iced::widget::text::Wrapping::None),
@@ -618,7 +618,7 @@ fn preview_plays_cell<'a>(play_count: Option<u32>) -> Element<'a, Message> {
 fn preview_genre_cell<'a>(genre: &'a str) -> Element<'a, Message> {
     container(
         text(genre)
-            .size(10.5)
+            .size(crate::theme::fs(10.5))
             .font(theme::ui_font())
             .color(theme::fg3())
             .wrapping(iced::widget::text::Wrapping::None)
@@ -635,7 +635,7 @@ fn preview_genre_cell<'a>(genre: &'a str) -> Element<'a, Message> {
 fn preview_duration_cell<'a>(duration: &'a str) -> Element<'a, Message> {
     container(
         text(duration)
-            .size(11)
+            .size(crate::theme::fs(11))
             .font(theme::ui_font())
             .color(theme::fg3())
             .wrapping(iced::widget::text::Wrapping::None),
@@ -659,7 +659,7 @@ fn form_pane<'a>(session: &'a RulesSessionUi, _window_height: f32) -> Element<'a
             .id(RULES_JSON_EDITOR_ID)
             .on_action(|a| Message::RulesEditor(RulesEditorMessage::JsonEdited(a)))
             .font(theme::ui_font())
-            .size(12)
+            .size(crate::theme::fs(12))
             .height(Length::Fill)
             .style(json_editor_style);
         let mut col = column![
@@ -683,7 +683,7 @@ fn form_pane<'a>(session: &'a RulesSessionUi, _window_height: f32) -> Element<'a
         if let Some(err) = &json.parse_error {
             col = col.push(
                 text(format!("Parse error: {err}"))
-                    .size(11)
+                    .size(crate::theme::fs(11))
                     .font(theme::ui_font())
                     .color(theme::warning())
                     .boxed(),
@@ -814,7 +814,7 @@ fn render_form_row<'a>(
                 .map_or(Conjunction::All, |r| r.conjunction);
             row![
                 text("Match")
-                    .size(12)
+                    .size(crate::theme::fs(12))
                     .font(theme::ui_font())
                     .color(theme::fg2()),
                 ring_wrap(
@@ -829,7 +829,7 @@ fn render_form_row<'a>(
                     ),
                 ),
                 text("of the following")
-                    .size(12)
+                    .size(crate::theme::fs(12))
                     .font(theme::ui_font())
                     .color(theme::fg2()),
             ]
@@ -883,7 +883,7 @@ fn render_form_row<'a>(
             };
             row![
                 text(if *i == 0 { "Sort by" } else { "then" })
-                    .size(12)
+                    .size(crate::theme::fs(12))
                     .font(theme::ui_font())
                     .color(theme::fg2())
                     .width(Length::Fixed(52.0)),
@@ -930,7 +930,7 @@ fn render_form_row<'a>(
                 .unwrap_or_default();
             row![
                 text("Limit")
-                    .size(12)
+                    .size(crate::theme::fs(12))
                     .font(theme::ui_font())
                     .color(theme::fg2())
                     .width(Length::Fixed(52.0)),
@@ -954,7 +954,7 @@ fn render_form_row<'a>(
                     ),
                 ),
                 text("offset")
-                    .size(11)
+                    .size(crate::theme::fs(11))
                     .font(theme::ui_font())
                     .color(theme::fg3()),
                 ring_wrap(
@@ -977,7 +977,7 @@ fn render_form_row<'a>(
             let delay_text = session.rules.refresh_delay.clone().unwrap_or_default();
             row![
                 text("Refresh")
-                    .size(12)
+                    .size(crate::theme::fs(12))
                     .font(theme::ui_font())
                     .color(theme::fg2())
                     .width(Length::Fixed(52.0)),
@@ -993,7 +993,7 @@ fn render_form_row<'a>(
                     ),
                 ),
                 text(REFRESH_DELAY_HINT)
-                    .size(11)
+                    .size(crate::theme::fs(11))
                     .font(theme::ui_font())
                     .color(theme::fg3()),
             ]
@@ -1095,7 +1095,7 @@ fn render_rule_row<'a>(
                     ));
                     cells = cells.push(
                         text("to")
-                            .size(11)
+                            .size(crate::theme::fs(11))
                             .font(theme::ui_font())
                             .color(theme::fg3())
                             .boxed(),
@@ -1120,7 +1120,7 @@ fn render_rule_row<'a>(
                     ));
                     cells = cells.push(
                         text("days")
-                            .size(11)
+                            .size(crate::theme::fs(11))
                             .font(theme::ui_font())
                             .color(theme::fg3())
                             .boxed(),
@@ -1168,7 +1168,7 @@ fn render_rule_row<'a>(
                 indent_gap(indent),
                 container(
                     text(raw)
-                        .size(11)
+                        .size(crate::theme::fs(11))
                         .font(theme::ui_font())
                         .color(theme::fg3())
                         .wrapping(iced::widget::text::Wrapping::None),
@@ -1221,7 +1221,7 @@ fn sub_picker_overlay<'a>(
         .on_input(|s| Message::RulesEditor(RulesEditorMessage::SubPickerQuery(s)))
         .on_submit(Message::RulesEditor(RulesEditorMessage::SubPickerCommit))
         .id(RULES_SUB_PICKER_INPUT_ID)
-        .size(13)
+        .size(crate::theme::fs(13))
         .font(theme::ui_font())
         .padding(8)
         .width(Length::Fill)
@@ -1231,7 +1231,7 @@ fn sub_picker_overlay<'a>(
     for (i, (value, label)) in entries.iter().enumerate().take(RULES_PICKER_RENDER_CAP) {
         let selected = i == picker.cursor;
         let label_el = text(label.clone())
-            .size(12.5)
+            .size(crate::theme::fs(12.5))
             .font(theme::ui_font())
             .color(theme::fg0());
         // The dim right column only when it says something new — a tag-value
@@ -1243,7 +1243,7 @@ fn sub_picker_overlay<'a>(
                 label_el,
                 Space::new().width(Length::Fill),
                 text(value.clone())
-                    .size(10.5)
+                    .size(crate::theme::fs(10.5))
                     .font(theme::ui_font())
                     .color(theme::fg4()),
             ]
@@ -1315,7 +1315,7 @@ fn date_picker_overlay<'a>(year: i32, month: u32, focused_day: usize) -> Element
         ),
         container(
             text(format!("{} {}", grid.month_name, grid.year))
-                .size(13)
+                .size(crate::theme::fs(13))
                 .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                 .color(theme::fg0()),
         )
@@ -1334,7 +1334,7 @@ fn date_picker_overlay<'a>(year: i32, month: u32, focused_day: usize) -> Element
         weekdays = weekdays.push(
             container(
                 text(wd)
-                    .size(10.5)
+                    .size(crate::theme::fs(10.5))
                     .font(theme::ui_font())
                     .color(theme::fg4()),
             )
@@ -1399,7 +1399,7 @@ fn date_nav_button<'a>(glyph: &'a str, msg: Message) -> Element<'a, Message> {
         HoverOverlay::new(
             container(
                 text(glyph)
-                    .size(16)
+                    .size(crate::theme::fs(16))
                     .font(theme::ui_font())
                     .color(theme::fg1()),
             )
@@ -1431,7 +1431,7 @@ fn day_cell<'a>(day: u32, focused: bool, today: bool, w: f32, h: f32) -> Element
     };
     let cell = container(
         text(day.to_string())
-            .size(12.5)
+            .size(crate::theme::fs(12.5))
             .font(theme::ui_font())
             .color(label_color),
     )
@@ -1494,11 +1494,11 @@ fn discard_confirm_overlay<'a>() -> Element<'a, Message> {
     let panel = container(
         column![
             text("Discard rule changes?")
-                .size(14)
+                .size(crate::theme::fs(14))
                 .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                 .color(theme::fg0()),
             text("Unsaved edits to this smart playlist will be lost.")
-                .size(12)
+                .size(crate::theme::fs(12))
                 .font(theme::ui_font())
                 .color(theme::fg3()),
             row![
@@ -1530,7 +1530,7 @@ fn conflict_banner<'a>() -> Element<'a, Message> {
     container(
         row![
             text("This playlist changed on the server while you were editing.")
-                .size(12)
+                .size(crate::theme::fs(12))
                 .font(theme::ui_font())
                 .color(theme::fg0()),
             Space::new().width(Length::Fill),
@@ -1561,7 +1561,7 @@ fn target_gone_banner<'a>() -> Element<'a, Message> {
     container(
         row![
             text("The playlist was deleted on the server.")
-                .size(12)
+                .size(crate::theme::fs(12))
                 .font(theme::ui_font())
                 .color(theme::fg0()),
             Space::new().width(Length::Fill),
@@ -1668,7 +1668,7 @@ fn chip<'a>(label: &str, accent: bool, on_press: Message) -> Element<'a, Message
         HoverOverlay::new(
             container(
                 text(label.to_owned())
-                    .size(11.5)
+                    .size(crate::theme::fs(11.5))
                     .font(theme::ui_font())
                     .color(color)
                     .wrapping(iced::widget::text::Wrapping::None),
@@ -1696,7 +1696,7 @@ fn dim_action<'a>(label: &str, on_press: Message) -> Element<'a, Message> {
         HoverOverlay::new(
             container(
                 text(label.to_owned())
-                    .size(11.5)
+                    .size(crate::theme::fs(11.5))
                     .font(theme::ui_font())
                     .color(theme::fg3()),
             )
@@ -1753,11 +1753,11 @@ fn action_row<'a>(
             container(
                 column![
                     text(title.to_owned())
-                        .size(13)
+                        .size(crate::theme::fs(13))
                         .font(theme::weighted_ui_font(iced::font::Weight::Semibold))
                         .color(theme::fg0()),
                     text(subtitle.to_owned())
-                        .size(10.5)
+                        .size(crate::theme::fs(10.5))
                         .font(theme::ui_font())
                         .color(theme::fg3()),
                 ]
@@ -1812,7 +1812,7 @@ fn value_cell<'a>(
             .on_input(|s| Message::RulesEditor(RulesEditorMessage::EditingInput(s)))
             .on_submit(Message::RulesEditor(RulesEditorMessage::CommitEditing))
             .id(RULES_VALUE_INPUT_ID)
-            .size(12)
+            .size(crate::theme::fs(12))
             .font(theme::ui_font())
             .padding([3, 6])
             .width(Length::Fixed(110.0))
@@ -1826,7 +1826,7 @@ fn value_cell<'a>(
         };
         let dim = committed.is_empty();
         let label = text(shown)
-            .size(12)
+            .size(crate::theme::fs(12))
             .font(theme::ui_font())
             .color(if dim { theme::fg4() } else { theme::fg0() })
             .wrapping(iced::widget::text::Wrapping::None);
@@ -1910,7 +1910,7 @@ fn edit_bar_field<'a>(input: Element<'a, Message>, show_pencil: bool) -> Element
 fn form_hint<'a>(copy: &str) -> Element<'a, Message> {
     container(
         text(copy.to_owned())
-            .size(10.5)
+            .size(crate::theme::fs(10.5))
             .font(theme::ui_font())
             .color(theme::fg4()),
     )
@@ -1921,7 +1921,7 @@ fn form_hint<'a>(copy: &str) -> Element<'a, Message> {
 fn empty_copy<'a>(copy: &'static str) -> Element<'a, Message> {
     container(
         text(copy)
-            .size(12.5)
+            .size(crate::theme::fs(12.5))
             .font(theme::ui_font())
             .color(theme::fg3()),
     )
@@ -1949,7 +1949,7 @@ fn diag_line<'a>(
         col = col.push(
             container(
                 text(diag.message.clone())
-                    .size(10.5)
+                    .size(crate::theme::fs(10.5))
                     .font(theme::ui_font())
                     .color(color),
             )

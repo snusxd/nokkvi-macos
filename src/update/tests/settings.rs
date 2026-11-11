@@ -336,6 +336,7 @@ fn player_settings_loaded_mirrors_all_theme_atomics() {
     let prior_opacity_gradient = crate::theme::is_opacity_gradient();
     let prior_slot_text_links = crate::theme::is_slot_text_links();
     let prior_horizontal_volume = crate::theme::is_horizontal_volume();
+    let prior_smooth_trackpad_scroll = crate::theme::is_smooth_trackpad_scroll();
     let prior_font_family = crate::theme::font_family();
     let prior_strip_show_title = crate::theme::strip_show_title();
     let prior_strip_show_artist = crate::theme::strip_show_artist();
@@ -368,6 +369,7 @@ fn player_settings_loaded_mirrors_all_theme_atomics() {
     crate::theme::set_opacity_gradient(false);
     crate::theme::set_slot_text_links(false);
     crate::theme::set_horizontal_volume(false);
+    crate::theme::set_smooth_trackpad_scroll(false);
     crate::theme::set_font_family("NokkviPreSeedDistinctFont".to_string());
     crate::theme::set_strip_show_title(false);
     crate::theme::set_strip_show_artist(false);
@@ -467,6 +469,11 @@ fn player_settings_loaded_mirrors_all_theme_atomics() {
         crate::theme::is_horizontal_volume(),
         settings.horizontal_volume,
         "horizontal_volume not mirrored (missing set_horizontal_volume)"
+    );
+    assert_eq!(
+        crate::theme::is_smooth_trackpad_scroll(),
+        settings.smooth_trackpad_scroll,
+        "smooth_trackpad_scroll not mirrored (missing set_smooth_trackpad_scroll)"
     );
     assert_eq!(
         crate::theme::font_family(),
@@ -573,6 +580,7 @@ fn player_settings_loaded_mirrors_all_theme_atomics() {
     crate::theme::set_opacity_gradient(prior_opacity_gradient);
     crate::theme::set_slot_text_links(prior_slot_text_links);
     crate::theme::set_horizontal_volume(prior_horizontal_volume);
+    crate::theme::set_smooth_trackpad_scroll(prior_smooth_trackpad_scroll);
     crate::theme::set_font_family(prior_font_family);
     crate::theme::set_strip_show_title(prior_strip_show_title);
     crate::theme::set_strip_show_artist(prior_strip_show_artist);

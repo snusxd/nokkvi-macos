@@ -42,6 +42,11 @@ impl<V: std::fmt::Display> std::fmt::Display for SortPickerEntry<V> {
 /// completely untouched.
 pub(crate) enum HeaderButton<'a, Message> {
     SortToggle(Message),
+    /// Toggle `<3` Favorites filter (`SortMode::Favorited`).
+    Favorites {
+        active: bool,
+        on_press: Message,
+    },
     Refresh(Message),
     CenterOnPlaying(Message),
     /// `(tooltip_label, on_press)` — the plus-icon "add" button.
@@ -266,7 +271,7 @@ pub(crate) fn view_header_with_identity<
                         background: Some(theme::bg0_hard().into()),
                         ..Default::default()
                     });
-                iced::widget::column![strip, collapsed_separator()].boxed()
+                iced::widget::column![collapsed_separator(), strip].boxed()
             }
             // Hidden: visually nothing — but a thin transparent strip still
             // catches a mouse flick to the top edge (hotkeys reveal it too).
@@ -286,7 +291,7 @@ pub(crate) fn view_header_with_identity<
                 let strip_text = |s: String| {
                     container(
                         text(s)
-                            .size(11.0)
+                            .size(crate::theme::fs(11.0))
                             .font(theme::ui_font())
                             .color(theme::fg2())
                             .wrapping(iced::widget::text::Wrapping::None),
@@ -327,7 +332,7 @@ pub(crate) fn view_header_with_identity<
                         background: Some(theme::bg0_hard().into()),
                         ..Default::default()
                     });
-                iced::widget::column![strip, collapsed_separator()].boxed()
+                iced::widget::column![collapsed_separator(), strip].boxed()
             }
         };
         return maybe_hover_wrap(collapsed_el, on_hover_enter, on_hover_exit);
@@ -341,7 +346,7 @@ pub(crate) fn view_header_with_identity<
         // options (e.g. Settings, Login).
         container(
             text(current_view.to_string())
-                .size(12.0)
+                .size(crate::theme::fs(12.0))
                 .font(theme::weighted_ui_font(Weight::Medium))
                 .color(theme::fg0())
                 .wrapping(iced::widget::text::Wrapping::None)
@@ -392,7 +397,7 @@ pub(crate) fn view_header_with_identity<
         .placeholder(sort_placeholder.unwrap_or_default())
         .on_select(select_handler)
         .width(Length::Shrink)
-        .text_size(12.0)
+        .text_size(crate::theme::fs(12.0))
         .font(theme::weighted_ui_font(Weight::Medium))
         .padding([8, 12])
         .style(move |_theme, status| pick_list::Style {
@@ -459,6 +464,23 @@ pub(crate) fn view_header_with_identity<
                     "Sort: Descending"
                 };
                 button_cells.push(header_icon_cell(sort_icon_path, tooltip_text, sort_msg));
+            }
+            HeaderButton::Favorites { active, on_press } => {
+                let (icon_path, tooltip_text, color) = if active {
+                    (
+                        "assets/icons/heart-filled.svg",
+                        "Favorites: On (click to show all)",
+                        theme::love_color(),
+                    )
+                } else {
+                    ("assets/icons/heart.svg", "Favorites", theme::fg0())
+                };
+                button_cells.push(header_icon_cell_colored(
+                    icon_path,
+                    tooltip_text,
+                    on_press,
+                    color,
+                ));
             }
             HeaderButton::Refresh(refresh_msg) => {
                 button_cells.push(header_icon_cell(
@@ -527,7 +549,7 @@ pub(crate) fn view_header_with_identity<
 
     let count_cell: Element<'a, Message> = container(
         text(count_text)
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .font(theme::weighted_ui_font(Weight::Medium))
             .color(theme::fg2())
             .width(Length::Shrink),
@@ -624,11 +646,18 @@ pub(crate) fn view_header_with_identity<
         ]
     });
 
-    // A bg0_hard() strip plus a 1 px theme::border() sibling separator
-    // below it. Using a sibling line instead of the container's `border`
+    // A bg0_hard() strip under a 1 px theme::border() sibling separator
+    // (the toolbar sits at the bottom). Using a sibling line instead of the container's `border`
     // field avoids ringing the header with a 4-sided dark frame (Iced's
     // `Border` width applies uniformly to all sides).
     let full: Element<'a, Message> = iced::widget::column![
+        container(iced::widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(|_| container::Style {
+                background: Some(theme::border().into()),
+                ..Default::default()
+            }),
         container(
             header_row
                 .width(Length::Fill)
@@ -642,16 +671,6 @@ pub(crate) fn view_header_with_identity<
         }),
     ]
     .push(below.boxed())
-    .push(
-        container(iced::widget::Space::new())
-            .width(Length::Fill)
-            .height(Length::Fixed(1.0))
-            .style(|_| container::Style {
-                background: Some(theme::border().into()),
-                ..Default::default()
-            })
-            .boxed(),
-    )
     .boxed();
 
     // When auto-hide is active (hover callbacks supplied), wrap the revealed
@@ -718,6 +737,10 @@ impl CountStripParts {
             .buttons
             .iter()
             .filter_map(|btn| match btn {
+                HeaderButton::Favorites { active: true, .. } => {
+                    Some("assets/icons/heart-filled.svg")
+                }
+                HeaderButton::Favorites { active: false, .. } => Some("assets/icons/heart.svg"),
                 HeaderButton::Refresh(_) => Some("assets/icons/refresh-cw.svg"),
                 HeaderButton::CenterOnPlaying(_) => Some("assets/icons/locate.svg"),
                 HeaderButton::Add(_, _) => Some("assets/icons/plus.svg"),
@@ -860,13 +883,22 @@ pub(crate) fn header_icon_cell<'a, Message: Clone + 'a>(
     tooltip_text: &str,
     on_press: Message,
 ) -> Element<'a, Message> {
+    header_icon_cell_colored(icon_path, tooltip_text, on_press, theme::fg0())
+}
+
+fn header_icon_cell_colored<'a, Message: Clone + 'a>(
+    icon_path: &str,
+    tooltip_text: &str,
+    on_press: Message,
+    icon_color: iced::Color,
+) -> Element<'a, Message> {
     use iced::widget::{svg, tooltip};
 
     let icon_svg = crate::embedded_svg::svg_widget(icon_path)
         .width(Length::Fixed(18.0))
         .height(Length::Fixed(18.0))
-        .style(|_theme, _status| svg::Style {
-            color: Some(theme::fg0()),
+        .style(move |_theme, _status| svg::Style {
+            color: Some(icon_color),
         });
 
     tooltip(
@@ -884,7 +916,7 @@ pub(crate) fn header_icon_cell<'a, Message: Clone + 'a>(
         .interaction(iced::mouse::Interaction::Pointer),
         container(
             text(tooltip_text.to_string())
-                .size(11.0)
+                .size(crate::theme::fs(11.0))
                 .font(theme::ui_font()),
         )
         .padding(4),

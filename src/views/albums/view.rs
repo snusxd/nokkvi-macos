@@ -69,8 +69,18 @@ impl AlbumsPage {
             show_search: true,
             on_search_change: Box::new(AlbumsMessage::SearchQueryChanged),
             buttons: {
+                let is_favorited = self.common.current_sort_mode == SortMode::Favorited;
+                let fav_target = if is_favorited {
+                    SortMode::RecentlyAdded
+                } else {
+                    SortMode::Favorited
+                };
                 let mut btns = vec![
                     HeaderButton::SortToggle(AlbumsMessage::ToggleSortOrder),
+                    HeaderButton::Favorites {
+                        active: is_favorited,
+                        on_press: AlbumsMessage::SortModeSelected(fav_target),
+                    },
                     HeaderButton::Refresh(AlbumsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::RefreshViewData,
                     )),
@@ -140,6 +150,7 @@ impl AlbumsPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: data.chrome.header_reserve(),
             bleed: data.bleed,
         };
 
@@ -179,8 +190,8 @@ impl AlbumsPage {
             &self.common.slot_list,
             &flattened,
             &config,
-            AlbumsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateUp),
-            AlbumsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateDown),
+            AlbumsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollUp),
+            AlbumsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(flattened.len(), AlbumsMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 AlbumsMessage::SlotList,
@@ -274,11 +285,11 @@ impl AlbumsPage {
 
                 let mut col = column![
                     text(album.name.clone())
-                        .size(24)
+                        .size(crate::theme::fs(24))
                         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                         .color(theme::fg0()),
                     text(album.artist.clone())
-                        .size(16)
+                        .size(crate::theme::fs(16))
                         .color(theme::fg1())
                         .font(theme::ui_font()),
                 ]
@@ -326,7 +337,7 @@ impl AlbumsPage {
                 if let Some(genres_display) = &album.genres {
                     col = col.push(
                         text(genres_display.clone())
-                            .size(13)
+                            .size(crate::theme::fs(13))
                             .color(theme::fg3())
                             .font(theme::ui_font())
                             .boxed(),

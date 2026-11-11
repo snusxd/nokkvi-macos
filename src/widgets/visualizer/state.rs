@@ -627,6 +627,14 @@ pub(crate) struct VisualizerState {
     /// to 0 so the GPU still idles once nothing is animating.
     trail_settle_frames: Arc<AtomicU32>,
 
+    /// The kick-drum detector (`kick.rs`) behind Theater Mode's Cover Beat.
+    /// Fed the raw PCM every tick in every mode; only the FFT worker touches
+    /// it (`try_lock`). `None` until the first tick, rebuilt on a rate change.
+    kick: Arc<Mutex<Option<super::kick::KickDetector>>>,
+    /// The latest kick: sequence in the high 32 bits (bumps per kick), the
+    /// strength's `f32` bits in the low 32. Lock-free for the UI thread.
+    cover_kick: Arc<AtomicU64>,
+
     // === MilkDrop mode ===
     /// The MilkDrop analyzer and its conversion scratch. Only the FFT worker
     /// touches it (`try_lock`); the Arc exists because the state is `Clone`.
@@ -817,6 +825,8 @@ impl VisualizerState {
             band_mid: Arc::new(AtomicU32::new(0_f32.to_bits())),
             band_treble: Arc::new(AtomicU32::new(0_f32.to_bits())),
             trail_settle_frames: Arc::new(AtomicU32::new(0)),
+            kick: Arc::new(Mutex::new(None)),
+            cover_kick: Arc::new(AtomicU64::new(0)),
             milkdrop_feed: Arc::new(Mutex::new(MilkdropFeed::default())),
             milkdrop,
         }
@@ -1026,6 +1036,11 @@ impl VisualizerState {
 
         if buffer.len() >= chunk_size {
             let process_samples: Vec<f64> = buffer.drain(..chunk_size).collect();
+            self.detect_kicks(
+                process_samples
+                    .iter()
+                    .map(|&s| (s as f32 / WAVEFORM_FULL_SCALE).clamp(-1.0, 1.0)),
+            );
             // Scope mode: snapshot the raw PCM chunk as a time-domain waveform —
             // mixed to mono and resampled to the ring point count, plotted as-is
             // (no phase trigger, no seam closure) so the trace stays pure. The
@@ -1364,6 +1379,7 @@ impl VisualizerState {
             );
         }
 
+        self.detect_kicks(feed.scratch.iter().copied());
         let Some((_, analyzer)) = feed.analyzer.as_mut() else {
             return false;
         };
@@ -1500,6 +1516,33 @@ impl VisualizerState {
             return 0.0;
         }
         f32::from_bits(self.long_onset_envelope.load(Ordering::Relaxed))
+    }
+
+    /// Run interleaved stereo (`-1.0..=1.0`) through the kick detector and
+    /// publish a kick it finds. Worker thread only.
+    fn detect_kicks(&self, samples: impl Iterator<Item = f32>) {
+        let Some(mut slot) = self.kick.try_lock() else {
+            return;
+        };
+        let rate = self.sample_rate.load(Ordering::Acquire);
+        let detector = match slot.as_mut() {
+            Some(d) if d.rate() == rate => d,
+            _ => slot.insert(super::kick::KickDetector::new(rate)),
+        };
+        if let Some(strength) = detector.push_stereo(samples) {
+            let prev = self.cover_kick.load(Ordering::Relaxed);
+            let seq = ((prev >> 32) as u32).wrapping_add(1);
+            self.cover_kick.store(
+                (u64::from(seq) << 32) | u64::from(strength.to_bits()),
+                Ordering::Release,
+            );
+        }
+    }
+
+    /// See [`super::Visualizer::cover_kick`].
+    pub(crate) fn cover_kick(&self) -> (u32, f32) {
+        let packed = self.cover_kick.load(Ordering::Acquire);
+        ((packed >> 32) as u32, f32::from_bits(packed as u32))
     }
 
     /// Normalized beat pulse (~[0,1]) — rises on transients/kicks, decays
@@ -1813,6 +1856,9 @@ impl VisualizerState {
         self.horizon.lock().clear();
         self.tunnel.lock().clear();
         self.ripples.lock().clear();
+        if let Some(kick) = self.kick.lock().as_mut() {
+            kick.reset();
+        }
         self.effects.lock().clear(bar_count);
         self.processing.lock().clear(bar_count);
 

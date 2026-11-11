@@ -369,6 +369,14 @@ macro_rules! impl_expansion_update {
                     let $center = $self.expansion.handle_navigate_down($items, &mut $self.common);
                     (Task::none(), $on_center)
                 }
+                Slot::ScrollUp => {
+                    $self.expansion.handle_scroll_up($items, &mut $self.common);
+                    (Task::none(), $action_none)
+                }
+                Slot::ScrollDown => {
+                    $self.expansion.handle_scroll_down($items, &mut $self.common);
+                    (Task::none(), $action_none)
+                }
                 Slot::SetOffset(offset, modifiers) => {
                     let $center = $self.expansion.handle_select_offset(
                         offset,
@@ -381,7 +389,7 @@ macro_rules! impl_expansion_update {
                 Slot::ScrollSeek(offset) => {
                     // Mid-drag: move the viewport only. Artwork and page fetches
                     // wait for the SeekSettled debounce's synthesized SetOffset.
-                    $self.expansion.handle_set_offset(offset, $items, &mut $self.common);
+                    $self.expansion.handle_scroll_seek(offset, $items, &mut $self.common);
                     (Task::none(), $action_none)
                 }
 

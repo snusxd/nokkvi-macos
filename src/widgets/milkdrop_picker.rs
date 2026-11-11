@@ -130,7 +130,7 @@ pub(crate) fn milkdrop_picker_overlay<'a>(
                     color: Some(chip_color),
                 }),
             text("Favorites")
-                .size(12.0)
+                .size(crate::theme::fs(12.0))
                 .font(theme::ui_font())
                 .color(chip_color),
         ]
@@ -146,7 +146,7 @@ pub(crate) fn milkdrop_picker_overlay<'a>(
         state.list.filtered.len(),
         state.list.all.len()
     ))
-    .size(11.0)
+    .size(crate::theme::fs(11.0))
     .font(theme::ui_font())
     .color(theme::fg4());
 
@@ -257,7 +257,7 @@ fn render_preset_slot<'a>(
     };
 
     let title = text(name.to_string())
-        .size(14.0)
+        .size(crate::theme::fs(14.0))
         .font(theme::weighted_ui_font(weight))
         .color(if flags.on_screen && !is_center {
             theme::accent()
@@ -272,7 +272,7 @@ fn render_preset_slot<'a>(
         column![
             title,
             text(subtitle)
-                .size(11.0)
+                .size(crate::theme::fs(11.0))
                 .font(theme::ui_font())
                 .color(subtitle_color)
                 .wrapping(iced::widget::text::Wrapping::None),

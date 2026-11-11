@@ -5,7 +5,7 @@
 //!      show_album_artists_only, similar_artists_online, similar_artists_deezer
 //!   2. Display  — start_view, suppress_library_refresh_toasts
 //!   3. Behavior — enter_behavior, enter_shuffle, harbour_expandable_shelves,
-//!      stable_viewport, auto_follow_playing, seek_step
+//!      stable_viewport, smooth_trackpad_scroll, auto_follow_playing, seek_step
 //!   4. Window & Tray — show_tray_icon, close_to_tray
 //!   5. Advanced — local_music_path, verbose_config
 //!   6. Account  — read-only server URL + username mirrors and the logout
@@ -72,6 +72,7 @@ pub(crate) fn build_general_items(data: &GeneralSettingsData) -> Vec<SettingsEnt
         macro_rows.take("general.enter_shuffle"),
         macro_rows.take("general.harbour_expandable_shelves"),
         macro_rows.take("general.stable_viewport"),
+        macro_rows.take("general.smooth_trackpad_scroll"),
         macro_rows.take("general.auto_follow_playing"),
         macro_rows.take("general.seek_step"),
         // --- Window & Tray ---

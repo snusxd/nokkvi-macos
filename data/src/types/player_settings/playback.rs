@@ -86,6 +86,14 @@ pub const REPLAY_GAIN_DB_MAX: f32 = 15.0;
 pub const SFX_VOLUME_MIN: f64 = 0.0;
 pub const SFX_VOLUME_MAX: f64 = 1.0;
 
+/// Lyrics text size in px: the size of a line at the Queue-cover reference
+/// panel, which the panel-fit scale then grows with the panel (16 is the
+/// designed size). Shared by the setter clamp, the load-time `validate()`, the
+/// stepper's declared `min`/`max` and the viewport's scale.
+pub const LYRICS_FONT_SIZE_PX_MIN: u32 = 10;
+pub const LYRICS_FONT_SIZE_PX_MAX: u32 = 40;
+pub const LYRICS_FONT_SIZE_PX_DEFAULT: u32 = 16;
+
 define_labeled_enum! {
     /// Volume normalization level — controls the AGC target loudness.
     ///

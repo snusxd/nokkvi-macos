@@ -787,6 +787,9 @@ pub enum NavigationMessage {
     /// toast if so. No-op when the find resolved within the threshold.
     /// Songs only enter the chain via the CenterOnPlaying (Shift+C) fallback.
     ExpandTimeout(crate::state::PendingExpand),
+    /// A nav tab was dragged from index `from` to index `to` of the shown
+    /// order (either bar); persists `general.nav_tab_order`.
+    ReorderTabs { from: usize, to: usize },
 }
 
 /// Cross-cutting Find/Similar lookup messages — triggered from any view to
@@ -1129,6 +1132,8 @@ pub enum EditorMessage {
 pub enum CrossPaneDragMessage {
     /// Mouse pressed in browser pane — record origin for threshold detection.
     Pressed,
+    /// Focused widget ID resolved after a mouse press (syncs searchbar focus).
+    FocusedWidget(Option<iced::advanced::widget::Id>),
     /// Cursor moved while mouse button held — check for drag threshold / update position.
     Moved(iced::Point),
     /// Mouse released — finalize drop or cancel.
@@ -1204,6 +1209,9 @@ pub enum TheaterMessage {
     /// for the exit, then fullscreen is requested, only while theater is
     /// still active on that same window.
     PriorModeKnown(iced::window::Id, iced::window::Mode),
+    /// Where the Queue's cover panel sat on screen at entry (`None`: no cover
+    /// in view); starts the enter animation.
+    CoverBounds(Option<iced::Rectangle>),
 }
 
 /// Toast notification messages, namespaced under `Message::Toast(..)`
@@ -1614,6 +1622,8 @@ pub enum Message {
     StripContextAction(crate::widgets::context_menu::StripContextEntry),
     /// Toggle settings view: open if not in settings, return to Queue if already there
     ToggleSettings,
+    /// Show or hide the Now Playing sidebar (the hotkey).
+    ToggleNowPlayingSidebar,
     /// Set the currently open overlay menu (or `None` to close any open menu).
     /// Sole entry point for menu state changes — guarantees mutual exclusion
     /// between the hamburger menu, player-bar kebab, checkbox dropdowns, and

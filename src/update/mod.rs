@@ -46,6 +46,7 @@ pub(crate) mod chrome;
 mod collage;
 mod components;
 mod config;
+pub(crate) mod cover_beat;
 mod cross_pane_drag;
 mod default_playlist_picker;
 mod dynamic_accent;
@@ -188,6 +189,7 @@ impl Nokkvi {
                     self.handle_switch_view(crate::View::Settings)
                 }
             }
+            Message::ToggleNowPlayingSidebar => self.handle_toggle_now_playing_sidebar(),
             Message::SetOpenMenu(next) => self.handle_set_open_menu(next),
             Message::Roulette(msg) => self.handle_roulette_message(msg),
             Message::Login(msg) => self.handle_login(msg),
@@ -577,7 +579,9 @@ impl Nokkvi {
                     msg,
                     handle_albums,
                     crate::views::AlbumsMessage::SlotList(
-                        crate::widgets::SlotListPageMessage::ScrollSeek(_),
+                        crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown,
                     ),
                     View::Albums
                 )
@@ -590,6 +594,8 @@ impl Nokkvi {
                     handle_artists,
                     crate::views::ArtistsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown
                     ),
                     View::Artists
                 )
@@ -601,6 +607,8 @@ impl Nokkvi {
                     handle_songs,
                     crate::views::SongsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown
                     ),
                     View::Songs
                 )
@@ -612,6 +620,8 @@ impl Nokkvi {
                     handle_genres,
                     crate::views::GenresMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown
                     ),
                     View::Genres
                 )
@@ -623,6 +633,8 @@ impl Nokkvi {
                     handle_playlists,
                     crate::views::PlaylistsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown
                     ),
                     View::Playlists
                 )
@@ -634,6 +646,8 @@ impl Nokkvi {
                     handle_radios,
                     crate::views::RadiosMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown
                     ),
                     View::Radios
                 )
@@ -646,6 +660,8 @@ impl Nokkvi {
                     handle_harbour,
                     crate::views::HarbourMessage::SlotList(
                         crate::widgets::SlotListPageMessage::ScrollSeek(_)
+                            | crate::widgets::SlotListPageMessage::ScrollUp
+                            | crate::widgets::SlotListPageMessage::ScrollDown
                     ),
                     View::Harbour
                 )

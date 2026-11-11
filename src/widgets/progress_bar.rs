@@ -42,6 +42,13 @@ use iced::{
 };
 use nokkvi_data::types::{player_settings::SeekbarStyle, waveform::Waveform};
 
+/// A reported position this close to a pending seek's target means the seek
+/// landed.
+const SEEK_SETTLE_SECS: f32 = 1.0;
+/// How long a pending seek is drawn before the bar goes back to the reported
+/// position (a seek the engine refused or clamped).
+const SEEK_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// State for progress bar interaction
 #[derive(Debug, Clone, Default)]
 pub(crate) struct State {
@@ -49,6 +56,10 @@ pub(crate) struct State {
     drag_progress: f32,
     last_position: f32,
     last_update: Option<Instant>,
+    /// A seek this bar published and when, held until the playback position
+    /// reaches it: the position still reports the old point for a moment
+    /// after a seek, and drawing it flicked the playhead back and forth.
+    pending_seek: Option<(f32, Instant)>,
     /// The cursor's position over the track as a `0..=1` fraction, for the
     /// handle-less styles' hover preview. `None` while the cursor is elsewhere.
     hover: Option<f32>,
@@ -501,6 +512,15 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for ProgressBar<'_, 
 
         // Track position changes for interpolation
         // When position changes (from playback update), record it
+        if let Some((target, since)) = state.pending_seek
+            && ((self.position - target).abs() < SEEK_SETTLE_SECS
+                || since.elapsed() > SEEK_HOLD
+                || self.duration <= 0.0)
+        {
+            state.pending_seek = None;
+            state.last_position = self.position;
+            state.last_update = Some(Instant::now());
+        }
         if (self.position - state.last_position).abs() > 0.01 {
             state.last_position = self.position;
             state.last_update = Some(Instant::now());
@@ -537,6 +557,7 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for ProgressBar<'_, 
             // seeks the next song to a stale point.
             let had_hover = state.hover.take().is_some();
             let was_dragging = std::mem::take(&mut state.is_dragging);
+            state.pending_seek = None;
             if had_hover || was_dragging {
                 shell.request_redraw();
             }
@@ -566,12 +587,10 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for ProgressBar<'_, 
                         // Clicked on track - immediately seek to clicked position
                         let seek_pos = self.locate(cursor_position.x, track);
                         state.drag_progress = (seek_pos / self.duration).clamp(0.0, 1.0);
-                        // The handle-less styles have nothing to grab, so a
-                        // track press also begins a drag — click-and-drag
-                        // scrub from anywhere along the bar.
-                        if !self.style.has_grab_handle() {
-                            state.is_dragging = true;
-                        }
+                        // A track press also begins a drag in every style —
+                        // click-and-drag scrub from anywhere along the bar.
+                        state.is_dragging = true;
+                        state.pending_seek = Some((seek_pos, Instant::now()));
                         shell.publish((self.on_seek)(seek_pos));
                         shell.capture_event();
                         shell.request_redraw();
@@ -585,6 +604,7 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for ProgressBar<'_, 
                 // C++ pattern: ONLY seek to final position when user releases after drag
                 // This prevents seek spam during dragging
                 let seek_pos = state.drag_progress * self.duration;
+                state.pending_seek = Some((seek_pos, Instant::now()));
                 shell.publish((self.on_seek)(seek_pos));
                 state.is_dragging = false;
             }
@@ -637,6 +657,16 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for ProgressBar<'_, 
         let progress = if state.is_dragging {
             // During drag, use the visual drag position (not the actual playback position)
             state.drag_progress
+        } else if let Some((target, since)) = state.pending_seek
+            && self.duration > 0.0
+        {
+            // A seek in flight: draw where it goes, not the stale position.
+            let pos = if self.is_playing {
+                target + since.elapsed().as_secs_f32()
+            } else {
+                target
+            };
+            (pos / self.duration).clamp(0.0, 1.0)
         } else if self.is_playing
             && let Some(last_update) = state.last_update
             && self.duration > 0.0
@@ -703,10 +733,8 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for ProgressBar<'_, 
 
         let state = tree.state.downcast_ref::<State>();
 
-        if state.is_dragging {
-            mouse::Interaction::Grabbing
-        } else if cursor.is_over(self.track(&state.caps, layout.bounds())) {
-            mouse::Interaction::Grab
+        if state.is_dragging || cursor.is_over(self.track(&state.caps, layout.bounds())) {
+            mouse::Interaction::Pointer
         } else {
             mouse::Interaction::default()
         }

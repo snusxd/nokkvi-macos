@@ -112,6 +112,11 @@ pub(crate) struct BaseSlotListLayoutConfig {
     /// expected, producing a partial slot at the bottom. Horizontal /
     /// Always-mode layouts ignore this field.
     pub slot_list_chrome: f32,
+    /// `Some(band)`: the view header is drawn OVER the bottom of the list
+    /// (an auto-hide toolbar), the list column keeps only the collapsed
+    /// `band` for it, and a revealed toolbar grows upward across the rows
+    /// instead of resizing them. `None`: the header shares the column.
+    pub header_reserve: Option<f32>,
     /// Where the artwork column runs past the surrounding chrome this frame.
     /// Set by `home_view` (the only caller that resolves it) and threaded
     /// through every `*ViewData` so each view forwards it into the config it
@@ -476,6 +481,7 @@ pub(crate) fn single_artwork_panel<'a, Message: 'a + 'static>(
         None,
         ArtworkPlaceholder::Blank,
         PanelShape::FollowColumnMode,
+        crate::widgets::beat_scale::CoverScale::REST,
     )
 }
 
@@ -521,6 +527,10 @@ pub(crate) struct OverCoverBoat<'a> {
 /// centered and sized by `scope.radius`, filling the panel.
 ///
 /// [`Visualizer`]: crate::widgets::visualizer::Visualizer
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per optional panel layer (visualizer, boat, lyrics) plus the placeholder, shape and Cover Beat scale"
+)]
 fn single_artwork_panel_inner<'a, Message: 'a + 'static>(
     artwork_handle: Option<&'a iced::widget::image::Handle>,
     over_art: Option<(
@@ -533,6 +543,7 @@ fn single_artwork_panel_inner<'a, Message: 'a + 'static>(
     lyrics_on_wheel: Option<fn(f32) -> Message>,
     placeholder: ArtworkPlaceholder,
     shape: PanelShape,
+    cover_scale: crate::widgets::beat_scale::CoverScale,
 ) -> Element<'a, Message> {
     if shape == PanelShape::Fill || theme::artwork_column_mode().is_stretched() {
         let fit = match theme::artwork_column_stretch_fit() {
@@ -542,7 +553,14 @@ fn single_artwork_panel_inner<'a, Message: 'a + 'static>(
         // The cover fills the column edge to edge, and every layer above it
         // spans the same full (non-square) rect.
         return iced::widget::responsive(move |size| {
-            let cover = cover_layer(artwork_handle, placeholder, fit, size.width, size.height);
+            let cover = cover_layer(
+                artwork_handle,
+                placeholder,
+                fit,
+                size.width,
+                size.height,
+                cover_scale,
+            );
             compose_cover_panel(
                 cover,
                 size.width,
@@ -569,6 +587,7 @@ fn single_artwork_panel_inner<'a, Message: 'a + 'static>(
             ContentFit::Cover,
             square_size,
             square_size,
+            cover_scale,
         );
         compose_cover_panel(
             cover,
@@ -586,20 +605,26 @@ fn single_artwork_panel_inner<'a, Message: 'a + 'static>(
 }
 
 /// The cover image (or its placeholder) at `w` x `h` on the artwork backdrop:
-/// the base layer [`compose_cover_panel`] stacks onto.
+/// the base layer [`compose_cover_panel`] stacks onto. `scale` draws the
+/// picture grown about its center (the Cover Beat visualizer; `REST`
+/// otherwise) without changing the layout, so the layers above keep their size.
 fn cover_layer<'a, Message: 'a>(
     artwork_handle: Option<&'a iced::widget::image::Handle>,
     placeholder: ArtworkPlaceholder,
     fit: ContentFit,
     w: f32,
     h: f32,
+    scale: crate::widgets::beat_scale::CoverScale,
 ) -> Element<'a, Message> {
     let content: Element<'a, Message> = if let Some(handle) = artwork_handle {
-        iced::widget::image(handle.clone())
-            .content_fit(fit)
-            .width(Length::Fixed(w))
-            .height(Length::Fixed(h))
-            .boxed()
+        crate::widgets::beat_scale::BeatScale::new(
+            iced::widget::image(handle.clone())
+                .content_fit(fit)
+                .width(Length::Fixed(w))
+                .height(Length::Fixed(h)),
+            scale,
+        )
+        .boxed()
     } else {
         placeholder.content(Length::Fixed(w), Length::Fixed(h))
     };
@@ -804,6 +829,8 @@ pub(crate) fn single_artwork_panel_with_visualizer_and_menu<'a, Message: Clone +
     lyrics_on_wheel: Option<fn(f32) -> Message>,
     placeholder: ArtworkPlaceholder,
     shape: PanelShape,
+    // The Cover Beat visualizer's swell for the picture (`CoverScale::REST` when off).
+    cover_scale: crate::widgets::beat_scale::CoverScale,
     menu_entries: Vec<crate::widgets::context_menu::PanelMenuEntry<Message>>,
     is_open: bool,
     open_position: Option<iced::Point>,
@@ -817,6 +844,7 @@ pub(crate) fn single_artwork_panel_with_visualizer_and_menu<'a, Message: Clone +
         lyrics_on_wheel,
         placeholder,
         shape,
+        cover_scale,
     );
     wrap_with_panel_menu(panel, menu_entries, is_open, open_position, on_open_change)
 }
@@ -1140,16 +1168,50 @@ where
         // widget type matches horizontal_layout / vertical_layout — switching
         // artwork-mode mid-session keeps text_input focus alive. See CLAUDE.md
         // "Render output" gotcha.
-        let inner = column![header, slot_list_content]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .spacing(0);
+        let inner = list_with_header(slot_list_content, header, config.header_reserve);
 
         column![inner]
             .width(Length::Fill)
             .height(Length::Fill)
             .spacing(0)
             .boxed()
+    }
+}
+
+/// The slot list and its header as one column cell. Without a reserve the
+/// header sits under the list. With one, the list keeps only `reserve` of
+/// room for it and the header is pinned over the bottom of that cell, so a
+/// header taller than the band (the revealed toolbar) covers the list's last
+/// rows. `opaque` keeps the rows underneath from hovering through it.
+fn list_with_header<'a, Message: 'a>(
+    slot_list_content: Element<'a, Message>,
+    header: Element<'a, Message>,
+    reserve: Option<f32>,
+) -> Element<'a, Message> {
+    match reserve {
+        None => column![slot_list_content, header]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .spacing(0)
+            .boxed(),
+        Some(band) => iced::widget::stack![
+            column![
+                slot_list_content,
+                iced::widget::Space::new()
+                    .width(Length::Fill)
+                    .height(Length::Fixed(band)),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .spacing(0),
+            container(iced::widget::opaque(header))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_y(Alignment::End),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .boxed(),
     }
 }
 
@@ -1255,8 +1317,7 @@ where
         iced::widget::Space::new()
             .width(Length::Fill)
             .height(Length::Fixed(spacer_height)),
-        header,
-        slot_list_content,
+        list_with_header(slot_list_content, header, config.header_reserve),
         iced::widget::Space::new()
             .width(Length::Fill)
             .height(Length::Fixed(bottom_band_height)),
@@ -1352,12 +1413,13 @@ where
     let slot_list_pinned = container(slot_list_content)
         .width(Length::Fill)
         .height(Length::Fixed(slot_list_height));
+    let list_cell = list_with_header(slot_list_pinned.boxed(), header, config.header_reserve);
 
     // Wrap the inner column in an outer column so every base_slot_list_layout
     // branch returns the same root widget type — switching artwork-mode
     // mid-session keeps text_input focus alive. See CLAUDE.md "Render output"
     // gotcha.
-    let inner = column![artwork_side, header, slot_list_pinned]
+    let inner = column![artwork_side, list_cell]
         .width(Length::Fill)
         .height(Length::Fill)
         .spacing(0);
@@ -1407,6 +1469,7 @@ mod tests {
             // don't care about the slot-list rect — they exercise the
             // artwork-resolution math only.
             slot_list_chrome: 0.0,
+            header_reserve: None,
             bleed: ArtworkBleed::NONE,
         }
     }

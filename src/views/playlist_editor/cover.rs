@@ -99,7 +99,7 @@ pub(crate) fn cover_thumbnail<'a, M: Clone + 'a>(
             clickable,
             mouse_area(
                 text("Reset")
-                    .size(9.5)
+                    .size(crate::theme::fs(9.5))
                     .font(theme::ui_font())
                     .color(theme::fg4())
             )

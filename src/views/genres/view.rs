@@ -132,6 +132,7 @@ impl GenresPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: data.chrome.header_reserve(),
             bleed: data.bleed,
         };
 
@@ -170,8 +171,8 @@ impl GenresPage {
             &self.common.slot_list,
             &flattened,
             &config,
-            GenresMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateUp),
-            GenresMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateDown),
+            GenresMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollUp),
+            GenresMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(flattened.len(), GenresMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 GenresMessage::SlotList,

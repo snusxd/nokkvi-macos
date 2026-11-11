@@ -80,6 +80,8 @@ pub enum SlotListPageMessage {
     // Navigation (all views)
     NavigateUp,
     NavigateDown,
+    ScrollUp,
+    ScrollDown,
     SetOffset(usize, iced::keyboard::Modifiers),
     ScrollSeek(usize),
     // Activation
@@ -142,6 +144,8 @@ impl SlotListPageMessage {
             | Self::ToolbarDropdownToggled(_) => true,
             Self::NavigateUp
             | Self::NavigateDown
+            | Self::ScrollUp
+            | Self::ScrollDown
             | Self::SetOffset(..)
             | Self::ScrollSeek(_)
             | Self::ActivateCenter(_)
@@ -213,6 +217,24 @@ impl SlotListPageState {
         self.slot_list.record_scroll();
     }
 
+    /// Handle mouse-wheel / touchpad scroll up (moves viewport only, preserves selection)
+    pub fn handle_scroll_up(&mut self, total_items: usize) {
+        self.slot_list.scroll_up(total_items);
+        self.slot_list.record_scroll();
+    }
+
+    /// Handle mouse-wheel / touchpad scroll down (moves viewport only, preserves selection)
+    pub fn handle_scroll_down(&mut self, total_items: usize) {
+        self.slot_list.scroll_down(total_items);
+        self.slot_list.record_scroll();
+    }
+
+    /// Handle scrollbar drag/seek (moves viewport only, preserves selection)
+    pub fn handle_scroll_seek(&mut self, offset: usize, total_items: usize) {
+        self.slot_list.scroll_seek(offset, total_items);
+        self.slot_list.record_scroll();
+    }
+
     /// Handle slot list offset change (moves viewport, clears selected_offset)
     pub fn handle_set_offset(&mut self, offset: usize, total_items: usize) {
         self.slot_list.set_offset(offset, total_items);
@@ -235,6 +257,8 @@ impl SlotListPageState {
         // Any click ends a top-pin from find-and-expand: subsequent
         // scrolls should resume click-to-focus snap semantics.
         self.slot_list.selected_offset_pinned = false;
+        self.slot_list.suppress_center_highlight = false;
+        self.slot_list.keyboard_focused = false;
 
         if modifiers.control() {
             // Toggle selection for clicked item
@@ -555,12 +579,20 @@ impl SlotListPageState {
                 self.handle_navigate_down(total);
                 SlotListPageAction::None
             }
+            SlotListPageMessage::ScrollUp => {
+                self.handle_scroll_up(total);
+                SlotListPageAction::None
+            }
+            SlotListPageMessage::ScrollDown => {
+                self.handle_scroll_down(total);
+                SlotListPageAction::None
+            }
             SlotListPageMessage::SetOffset(offset, mods) => {
                 self.handle_slot_click(offset, total, mods);
                 SlotListPageAction::None
             }
             SlotListPageMessage::ScrollSeek(offset) => {
-                self.handle_set_offset(offset, total);
+                self.handle_scroll_seek(offset, total);
                 SlotListPageAction::None
             }
             SlotListPageMessage::SelectionToggle(offset) => {

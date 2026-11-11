@@ -76,7 +76,14 @@ impl Nokkvi {
                 // Any left click ends keyboard focus on the nav bar (a click on
                 // a tab switches the view, which clears it too).
                 self.nav_focus = None;
-                self.handle_cross_pane_drag_pressed()
+                let drag_task = self.handle_cross_pane_drag_pressed();
+                let focus_task = crate::widgets::query_focused_widget()
+                    .map(|id| Message::CrossPaneDrag(CrossPaneDragMessage::FocusedWidget(id)));
+                Task::batch([drag_task, focus_task])
+            }
+            CrossPaneDragMessage::FocusedWidget(focused) => {
+                self.sync_search_focus(focused);
+                Task::none()
             }
             CrossPaneDragMessage::Moved(pos) => self.handle_cross_pane_drag_moved(pos),
             CrossPaneDragMessage::Released => self.handle_cross_pane_drag_released(),
@@ -84,6 +91,38 @@ impl Nokkvi {
                 self.cancel_cross_pane_drag();
                 Task::none()
             }
+        }
+    }
+
+    /// Sync `search_input_focused` on every slot-list page (and the Trawl
+    /// modal) against the widget ID that currently owns Iced focus.
+    ///
+    /// Clicking into a search `text_input` focuses it inside Iced without
+    /// emitting a message; without syncing `search_input_focused`, moving the
+    /// cursor out of the header (`ToolbarHoverExit`) would collapse the
+    /// auto-hide toolbar while the searchbar is active. Conversely, clicking
+    /// outside the searchbar clears `search_input_focused`.
+    pub(crate) fn sync_search_focus(&mut self, focused: Option<iced::advanced::widget::Id>) {
+        let pages: [&mut dyn views::ViewPage; 9] = [
+            &mut self.albums_page,
+            &mut self.artists_page,
+            &mut self.songs_page,
+            &mut self.genres_page,
+            &mut self.playlists_page,
+            &mut self.queue_page,
+            &mut self.radios_page,
+            &mut self.harbour_page,
+            &mut self.similar_page,
+        ];
+        for page in pages {
+            let id = iced::advanced::widget::Id::from(page.search_input_id());
+            page.common_mut().search_input_focused = focused.as_ref() == Some(&id);
+        }
+        if let Some(modal) = self.trawl.modal.as_mut() {
+            let id = iced::advanced::widget::Id::from(
+                crate::widgets::trawl_modal::TRAWL_SEARCH_INPUT_ID,
+            );
+            modal.search_input_focused = focused.as_ref() == Some(&id);
         }
     }
     /// Look up the currently-hovered slot for the browsing panel's active
@@ -488,7 +527,7 @@ impl Nokkvi {
         if selection_count > 1 {
             let badge = iced::widget::container(
                 iced::widget::text(format!("×{selection_count}"))
-                    .size(13)
+                    .size(crate::theme::fs(13))
                     .font(crate::theme::ui_font())
                     .color(crate::theme::legible_text_on(
                         crate::theme::accent_fill_calm(),

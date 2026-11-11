@@ -202,6 +202,7 @@ keyword_table! {
             &["home", "one press", "dropdown", "collapse", "recently added", "most played"]
         },
         "general.auto_follow_playing" => &["autoscroll", "jump to current", "center on track"],
+        "general.smooth_trackpad_scroll" => &["inertia", "momentum", "touchpad", "pixel scroll", "glide"],
         "general.stable_viewport" => &["no scroll", "click to select", "anchor", "in place"],
         "general.suppress_library_refresh_toasts" => {
             &["notification", "rescan", "popup", "hide toast"]
@@ -237,6 +238,9 @@ keyword_table! {
         "general.autohide_toolbar_height" => &["reveal zone", "strip height", "toolbar size"],
         "general.autohide_toolbar_grip" => &["handle", "grab bar", "pull tab", "toolbar grip"],
         "general.scrollbar_visibility" => &["scroll bar", "gutter", "handle", "thumb", "track"],
+        "general.now_playing_sidebar" => &["sidebar", "side panel", "track info", "album card", "now playing panel"],
+        "general.font_size_px" => &["text size", "scale", "zoom", "bigger text", "smaller text"],
+        "general.font_weight" => &["bold", "light", "thickness", "boldness", "text weight"],
         "general.icon_set" => &["phosphor", "lucide", "glyphs", "symbols", "iconography"],
         "general.track_info_display" => &["now playing", "song info", "metadata"],
         "__toggle_mini_player_controls" => {
@@ -263,6 +267,15 @@ keyword_table! {
             "now playing screen",
             "immersive",
             "auto hide",
+        ],
+        "general.cover_beat_strength" => &[
+            "beat",
+            "kick",
+            "bass",
+            "pulse",
+            "bounce",
+            "zoom",
+            "cover visualizer",
         ],
         "general.theater_window_fullscreen" => &[
             "fullscreen",
@@ -333,6 +346,7 @@ keyword_table! {
             "ttml",
             "enhanced lrc",
         ],
+        "general.lyrics_font_size_px" => &["lyric text size", "lyrics size", "bigger lyrics", "text size"],
         "general.lyrics_alignment" => &[
             "align",
             "justify",

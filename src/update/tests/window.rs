@@ -82,6 +82,7 @@ fn resync_slot_counts_uses_collapsed_header_under_active_autohide() {
             window_height: h,
             show_artwork_column: true,
             slot_list_chrome: chrome_height_with_header(false),
+            header_reserve: None,
             bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
         })
     };
@@ -368,6 +369,7 @@ mod queue_resync_parity {
                 window_height: h as f32,
                 show_artwork_column: true,
                 slot_list_chrome: 0.0,
+                header_reserve: None,
                 bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
             })
             .map(|layout| layout.orientation)
@@ -409,8 +411,8 @@ mod queue_resync_parity {
 
         let differs = term_matters(&mut app, sweep(), |i| i.toolbar_collapsed = true);
         assert!(
-            !differs.is_empty(),
-            "setup invariant: collapsing the header must change the count at some height"
+            differs.is_empty(),
+            "the count must not depend on the toolbar's reveal state"
         );
         assert_parity(&mut app, sweep());
         reset_atomics();
@@ -775,8 +777,8 @@ mod library_resync_parity {
                 "setup invariant: the open menu holds {page:?}'s header expanded"
             );
             assert!(
-                !term_matters(&mut app, page, |c| c.toolbar_collapsed = true).is_empty(),
-                "setup invariant: collapsing {page:?}'s header must change the count"
+                term_matters(&mut app, page, |c| c.toolbar_collapsed = true).is_empty(),
+                "{page:?}'s count must not depend on the toolbar's reveal state"
             );
             failures.push((page, mismatches(&mut app, page)));
         }

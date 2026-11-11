@@ -12,6 +12,21 @@ use iced::Task;
 use crate::{Nokkvi, app_message::Message, views::settings::SettingsFocus};
 
 impl Nokkvi {
+    /// Flip the Now Playing sidebar and persist the choice. The slot counts
+    /// follow on their own (`resync_slot_counts` runs after every update, and
+    /// the pane width it reads subtracts the sidebar).
+    pub(crate) fn handle_toggle_now_playing_sidebar(&mut self) -> Task<Message> {
+        self.settings.now_playing_sidebar = !self.settings.now_playing_sidebar;
+        let shown = self.settings.now_playing_sidebar;
+        self.shell_spawn("persist_now_playing_sidebar", move |shell| async move {
+            shell.settings().set_now_playing_sidebar(shown).await
+        });
+        // The Interface tab's row reads it (the hotkey works with Settings open).
+        self.settings_page.config_dirty = true;
+        self.refresh_settings_entries_if_dirty();
+        Task::none()
+    }
+
     /// Build the settings view data, including the radio-scrobble connection
     /// status (read from `AppService`). This is always read — `data` is handed
     /// to `SettingsPage::update` on every non-nav message and is applied to the
@@ -42,6 +57,7 @@ impl Nokkvi {
             username: self.login_page.username.clone().into(),
             start_view: self.settings.start_view.clone().into(),
             stable_viewport: self.settings.stable_viewport,
+            smooth_trackpad_scroll: self.settings.smooth_trackpad_scroll,
             auto_follow_playing: self.settings.auto_follow_playing,
             enter_behavior: self.settings.enter_behavior.as_label().into(),
             enter_shuffle: self.settings.enter_shuffle,
@@ -80,6 +96,9 @@ impl Nokkvi {
             slot_text_links: crate::theme::is_slot_text_links(),
             scrollbar_visibility: crate::theme::scrollbar_visibility().as_label().into(),
             icon_set: crate::theme::icon_set().as_label().into(),
+            font_size_px: i64::from(crate::theme::font_size_px()),
+            font_weight: crate::theme::font_weight().as_label().into(),
+            now_playing_sidebar: self.settings.now_playing_sidebar,
             font_family: crate::theme::font_family().into(),
             strip_show_title: crate::theme::strip_show_title(),
             strip_show_artist: crate::theme::strip_show_artist(),
@@ -100,6 +119,7 @@ impl Nokkvi {
             artwork_cover: crate::theme::artwork_cover().as_label().into(),
             theater_controls: self.settings.theater_controls.as_label().into(),
             theater_window_fullscreen: self.settings.theater_window_fullscreen,
+            cover_beat_strength: self.settings.cover_beat_strength.as_label().into(),
             artwork_auto_max_pct: f64::from(crate::theme::artwork_auto_max_pct()),
             artwork_vertical_height_pct: f64::from(crate::theme::artwork_vertical_height_pct()),
         };
@@ -129,6 +149,7 @@ impl Nokkvi {
             lyrics_backdrop_blur: self.settings.lyrics_backdrop_blur.as_label().into(),
             lyrics_word_highlight: self.settings.lyrics_word_highlight.as_label().into(),
             lyrics_alignment: self.settings.lyrics_alignment.as_label().into(),
+            lyrics_font_size_px: i64::from(self.settings.lyrics_font_size_px),
             bit_perfect: self.settings.bit_perfect.as_label().into(),
             crossfade_duration_secs: i64::from(self.settings.crossfade_duration_secs),
             crossfade_curve: self.settings.crossfade_curve.as_label().into(),

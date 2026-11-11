@@ -368,7 +368,7 @@ pub(crate) fn trawl_modal_overlay<'a>(
         let n = mix.len();
         let noun = if n == 1 { "seed" } else { "seeds" };
         text(format!("{n} {noun}"))
-            .size(11.0)
+            .size(crate::theme::fs(11.0))
             .font(theme::ui_font())
             .color(theme::fg3())
             .boxed()
@@ -384,7 +384,7 @@ pub(crate) fn trawl_modal_overlay<'a>(
             }),
         Space::new().width(Length::Fixed(6.0)),
         text("Trawl")
-            .size(label_size)
+            .size(crate::theme::fs(label_size))
             .font(theme::weighted_ui_font(Weight::Bold))
             .color(theme::fg0()),
         Space::new().width(Length::Fixed(8.0)),
@@ -419,7 +419,7 @@ pub(crate) fn trawl_modal_overlay<'a>(
         };
         container(
             text(msg.clone())
-                .size(14)
+                .size(crate::theme::fs(14))
                 .font(theme::ui_font())
                 .color(theme::fg4())
                 .align_x(Alignment::Center),
@@ -510,7 +510,7 @@ fn render_trawl_slot<'a>(
             // fill: deliberately NOT Harbour's interactive header vocabulary.
             container(
                 text(title.to_uppercase())
-                    .size(11.0)
+                    .size(crate::theme::fs(11.0))
                     .color(theme::fg3())
                     .font(theme::weighted_ui_font(Weight::Bold)),
             )
@@ -522,7 +522,7 @@ fn render_trawl_slot<'a>(
         }
         TrawlRow::Hint(msg) => container(
             text(msg.clone())
-                .size(14)
+                .size(crate::theme::fs(14))
                 .font(theme::ui_font())
                 .color(theme::fg4()),
         )
@@ -614,12 +614,12 @@ fn render_trawl_slot<'a>(
 
             let text_col = column![
                 text(seed.label.clone())
-                    .size(14.0)
+                    .size(crate::theme::fs(14.0))
                     .font(theme::weighted_ui_font(weight))
                     .color(label_color)
                     .wrapping(text::Wrapping::None),
                 text(seed.sublabel.clone())
-                    .size(11.0)
+                    .size(crate::theme::fs(11.0))
                     .font(theme::ui_font())
                     .color(subtitle_color)
                     .wrapping(text::Wrapping::None),
@@ -735,7 +735,7 @@ fn tray_picker<'a, T: PartialEq + Clone + 'a>(
     pick_list(Some(selected), options, label)
         .on_select(on_select)
         .font(theme::ui_font())
-        .text_size(12.0)
+        .text_size(crate::theme::fs(12.0))
         .padding([4, 8])
         .style(move |_theme, status| tray_pick_list_style(status, focused))
         .menu_style(|_theme| tray_pick_list_menu_style())
@@ -761,7 +761,7 @@ fn render_tray<'a>(
                  Ctrl+Enter plays the mix, Shift+A queues it, Shift+P saves it as a \
                  playlist. Shift+Tab picks a control below, Left/Right change it.",
             )
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .font(theme::ui_font())
             .color(theme::fg4()),
         )
@@ -885,7 +885,7 @@ fn render_tray<'a>(
 
     let clear_btn = {
         let label = text("Clear")
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .font(theme::ui_font())
             .color(theme::fg2());
         let mut btn = button(label)
@@ -900,7 +900,7 @@ fn render_tray<'a>(
     let save_btn = {
         let mut btn = button(
             text("Save as Playlist")
-                .size(13.0)
+                .size(crate::theme::fs(13.0))
                 .font(theme::ui_font())
                 .wrapping(text::Wrapping::None)
                 .color(if empty { theme::fg4() } else { theme::fg0() }),
@@ -929,7 +929,7 @@ fn render_tray<'a>(
     let queue_btn = {
         let mut btn = button(
             text("Add to Queue")
-                .size(13.0)
+                .size(crate::theme::fs(13.0))
                 .font(theme::ui_font())
                 .wrapping(text::Wrapping::None)
                 .color(if empty { theme::fg4() } else { theme::fg0() }),
@@ -958,7 +958,7 @@ fn render_tray<'a>(
     let play_btn = {
         let mut btn = button(
             text("Play Mix")
-                .size(13.0)
+                .size(crate::theme::fs(13.0))
                 .font(theme::weighted_ui_font(Weight::Bold))
                 .wrapping(text::Wrapping::None)
                 .color(theme::on_accent_fill()),
@@ -1013,7 +1013,7 @@ fn render_tray<'a>(
     // height stability; the keyboard facts live in the empty-crate hint) ──
     let hint_line = row![
         text(mix.blend.hint())
-            .size(11.0)
+            .size(crate::theme::fs(11.0))
             .font(theme::ui_font())
             .color(theme::fg4()),
         Space::new().width(Length::Fill),
@@ -1081,12 +1081,12 @@ fn render_chip<'a>(
 
     let labels = column![
         text(truncate_label(&seed.label, 28))
-            .size(12.0)
+            .size(crate::theme::fs(12.0))
             .font(theme::weighted_ui_font(Weight::Bold))
             .color(theme::fg0())
             .wrapping(text::Wrapping::None),
         text(truncate_label(&seed.sublabel, 32))
-            .size(10.0)
+            .size(crate::theme::fs(10.0))
             .font(theme::ui_font())
             .color(theme::fg3())
             .wrapping(text::Wrapping::None),
@@ -1104,7 +1104,7 @@ fn render_chip<'a>(
         ));
         chip = chip.push(
             text(seed.weight.to_string())
-                .size(12.0)
+                .size(crate::theme::fs(12.0))
                 .font(theme::weighted_ui_font(Weight::Bold))
                 .color(theme::fg0())
                 .boxed(),

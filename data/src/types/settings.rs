@@ -6,13 +6,14 @@ use crate::{
         hotkey_config::HotkeyConfig,
         player_settings::{
             ArtworkColumnMode, ArtworkCover, ArtworkResolution, ArtworkStretchFit, BitPerfectMode,
-            CollapsedAppearance, CrossfadeCurve, EnterBehavior, FadeOnSkip, IconSet,
-            LibraryPageSize, LyricsAlignment, LyricsBackdropBlur, LyricsMode, LyricsWordHighlight,
-            NavDisplayMode, NavLayout, NormalizationLevel, RatingReminderTrigger, RoundedMode,
-            ScrollbarVisibility, SeekbarStyle, SlotRowHeight, StripClickAction, StripSeparator,
-            TheaterControls, TrackArtwork, TrackInfoDisplay, VerboseConfig, VisualizationMode,
-            VolumeNormalizationMode, deserialize_bit_perfect_with_bool_compat,
-            deserialize_rounded_mode_with_bool_compat, deserialize_verbose_config_with_bool_compat,
+            CollapsedAppearance, CoverBeatStrength, CrossfadeCurve, EnterBehavior, FadeOnSkip,
+            FontWeight, IconSet, LibraryPageSize, LyricsAlignment, LyricsBackdropBlur, LyricsMode,
+            LyricsWordHighlight, NavDisplayMode, NavLayout, NormalizationLevel,
+            RatingReminderTrigger, RoundedMode, ScrollbarVisibility, SeekbarStyle, SlotRowHeight,
+            StripClickAction, StripSeparator, TheaterControls, TrackArtwork, TrackInfoDisplay,
+            VerboseConfig, VisualizationMode, VolumeNormalizationMode,
+            deserialize_bit_perfect_with_bool_compat, deserialize_rounded_mode_with_bool_compat,
+            deserialize_verbose_config_with_bool_compat,
         },
         queue::{QueueSortPreferences, SortPreferences},
         queue_sort_mode::QueueSortMode,
@@ -62,6 +63,12 @@ crate::player_settings_schema! {
     /// and playback changes don't auto-scroll the viewport.
     #[serde(default = "default_stable_viewport")]
     same stable_viewport: bool = default_stable_viewport(),
+    /// Smooth trackpad scrolling (default: true)
+    /// When enabled, a pixel-delta scroll (trackpads, high-resolution wheels)
+    /// slides slot lists by fractions of a row and settles onto the row grid
+    /// when the gesture ends. Off keeps the one-row-per-event stepping.
+    #[serde(default = "default_smooth_trackpad_scroll")]
+    same smooth_trackpad_scroll: bool = default_smooth_trackpad_scroll(),
     /// Auto-follow playing track (default: true)
     /// When enabled, the queue view auto-scrolls to the currently playing
     /// track on track changes and queue reload.
@@ -128,6 +135,21 @@ crate::player_settings_schema! {
     /// Phosphor on upgrade; pick `Lucide` to keep the original outline set.
     #[serde(default)]
     same icon_set: IconSet = IconSet::default(),
+    /// UI font size in px (default: 14, the designed size)
+    #[serde(default = "default_font_size_px")]
+    same font_size_px: u32 = default_font_size_px(),
+    /// Base weight of the UI font (default: Regular)
+    #[serde(default)]
+    same font_weight: FontWeight = FontWeight::default(),
+    /// Whether the Now Playing sidebar (title, artist and album card of the
+    /// playing track) is shown left of the content (default: false)
+    #[serde(default)]
+    same now_playing_sidebar: bool = false,
+    /// The nav tabs' order, as the tabs' keys (`queue`, `albums`, …), set by
+    /// dragging a tab along the bar. Empty = the built-in order; the UI drops
+    /// unknown keys and appends any tab the list misses.
+    #[serde(default)]
+    same nav_tab_order: Vec<String> = Vec::new(),
     /// Whether crossfade between tracks is enabled (default: true)
     #[serde(default = "default_true")]
     same crossfade_enabled: bool = true,
@@ -151,6 +173,9 @@ crate::player_settings_schema! {
     /// Where lyric lines sit across the lyrics panel (default: Center).
     #[serde(default)]
     same lyrics_alignment: LyricsAlignment = LyricsAlignment::Center,
+    /// Lyrics text size in px (default: 16, the designed size)
+    #[serde(default = "default_lyrics_font_size_px")]
+    same lyrics_font_size_px: u32 = default_lyrics_font_size_px(),
     /// Bit-perfect output mode (Off / Strict / Relaxed): Strict and Relaxed
     /// play at each track's native sample rate with the DSP chain (EQ / software
     /// volume / limiter) bypassed, letting PipeWire switch the device clock.
@@ -427,6 +452,9 @@ crate::player_settings_schema! {
     /// Entering Theater Mode also makes the window fullscreen (default: off).
     #[serde(default)]
     same theater_window_fullscreen: bool = false,
+    /// How far the Cover Beat visualizer swells the cover (default: subtle).
+    #[serde(default)]
+    same cover_beat_strength: CoverBeatStrength = CoverBeatStrength::default(),
     /// Artwork column width as a fraction of window width (0.05..=0.80).
     /// Only consulted in always modes.
     #[serde(default = "default_artwork_column_width_pct")]
@@ -489,7 +517,8 @@ impl PersistedPlayerSettings {
                 AUTOHIDE_TOOLBAR_HEIGHT_MIN, CROSSFADE_DURATION_MAX_SECS,
                 CROSSFADE_DURATION_MIN_SECS, CROSSFADE_MIN_TRACK_MAX_SECS,
                 CROSSFADE_MIN_TRACK_MIN_SECS, CROSSFADE_OFFSET_MAX_SECS, CROSSFADE_OFFSET_MIN_SECS,
-                FADE_SKIP_SECS_MAX, FADE_SKIP_SECS_MIN, RATING_REMINDER_PERCENT_MAX,
+                FADE_SKIP_SECS_MAX, FADE_SKIP_SECS_MIN, FONT_SIZE_PX_MAX, FONT_SIZE_PX_MIN,
+                LYRICS_FONT_SIZE_PX_MAX, LYRICS_FONT_SIZE_PX_MIN, RATING_REMINDER_PERCENT_MAX,
                 RATING_REMINDER_PERCENT_MIN, REPLAY_GAIN_DB_MAX, REPLAY_GAIN_DB_MIN,
                 SCROBBLE_THRESHOLD_MAX, SCROBBLE_THRESHOLD_MIN, SEEK_STEP_MAX_SECS,
                 SEEK_STEP_MIN_SECS, SFX_VOLUME_MAX, SFX_VOLUME_MIN, TRANSPORT_FADE_MS_MAX,
@@ -543,6 +572,10 @@ impl PersistedPlayerSettings {
             REPLAY_GAIN_DB_MAX,
         );
 
+        self.font_size_px = self.font_size_px.clamp(FONT_SIZE_PX_MIN, FONT_SIZE_PX_MAX);
+        self.lyrics_font_size_px = self
+            .lyrics_font_size_px
+            .clamp(LYRICS_FONT_SIZE_PX_MIN, LYRICS_FONT_SIZE_PX_MAX);
         self.autohide_toolbar_height = self
             .autohide_toolbar_height
             .clamp(AUTOHIDE_TOOLBAR_HEIGHT_MIN, AUTOHIDE_TOOLBAR_HEIGHT_MAX);
@@ -619,6 +652,9 @@ fn default_start_view() -> String {
 fn default_stable_viewport() -> bool {
     true
 }
+fn default_smooth_trackpad_scroll() -> bool {
+    true
+}
 fn default_auto_follow_playing() -> bool {
     true
 }
@@ -639,6 +675,12 @@ fn default_transport_fade_ms() -> u32 {
 }
 fn default_fade_skip_secs() -> u32 {
     crate::types::player_settings::FADE_SKIP_SECS_DEFAULT
+}
+fn default_lyrics_font_size_px() -> u32 {
+    crate::types::player_settings::LYRICS_FONT_SIZE_PX_DEFAULT
+}
+fn default_font_size_px() -> u32 {
+    crate::types::player_settings::FONT_SIZE_PX_DEFAULT
 }
 fn default_autohide_toolbar_height() -> u32 {
     4

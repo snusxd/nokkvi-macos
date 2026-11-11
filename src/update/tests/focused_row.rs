@@ -351,11 +351,10 @@ fn the_albums_panel_follows_the_flattened_row() {
 }
 
 /// A plain click's row is a one-row selection that is the focus marker. A
-/// scrollbar drag drops both (as a keyboard step does), so Ctrl+D removes the
-/// row at the centre afterwards, the one Enter plays, never the clicked row
-/// that scrolled away.
+/// scrollbar drag moves only the viewport and keeps both, so Ctrl+D still
+/// removes the clicked row after it scrolled out of the centre.
 #[test]
-fn ctrl_d_after_a_scrollbar_drag_removes_the_centre_row() {
+fn ctrl_d_after_a_scrollbar_drag_removes_the_clicked_row() {
     let mut app = app_on_queue();
     for msg in [
         SlotListPageMessage::SetOffset(3, iced::keyboard::Modifiers::default()),
@@ -363,17 +362,18 @@ fn ctrl_d_after_a_scrollbar_drag_removes_the_centre_row() {
     ] {
         let _ = app.update(Message::Queue(QueueMessage::SlotList(msg)));
     }
-    let centre = app
-        .queue_page
-        .common
-        .get_center_item_index(ROWS)
-        .expect("a viewport centre");
-    assert_ne!(centre, 3, "the drag moved the list off the clicked row");
+    let list = &app.queue_page.common.slot_list;
+    assert_eq!(list.viewport_offset, 15, "the drag moved the viewport");
+    assert_eq!(
+        app.queue_page.common.get_center_item_index(ROWS),
+        Some(3),
+        "the clicked row stays focused"
+    );
 
     let _ = app.handle_remove_from_queue();
     let ids = queue_ids(&app);
-    assert!(ids.contains(&"s3".to_owned()), "the clicked row stayed");
-    assert!(!ids.contains(&format!("s{centre}")), "the centre row went");
+    assert!(!ids.contains(&"s3".to_owned()), "the clicked row went");
+    assert!(ids.contains(&"s15".to_owned()), "the centre row stayed");
 }
 
 /// A reload that drops rows above a highlighted row near the end moves the
@@ -393,4 +393,39 @@ fn a_queue_reload_clamps_the_viewport_before_it_keeps_the_highlight() {
     let list = &app.queue_page.common.slot_list;
     assert_eq!(list.viewport_offset, 14, "clamped to the rows");
     assert_eq!(list.selected_offset, Some(13), "the highlight followed s18");
+}
+
+/// The mouse wheel scrolls the list without focusing a row: with nothing
+/// selected, no row becomes the focus as it passes the centre.
+#[test]
+fn wheel_scroll_without_a_selection_focuses_no_row() {
+    let mut app = app_on_queue();
+    let before = app.queue_page.common.slot_list.viewport_offset;
+    for _ in 0..5 {
+        let _ = app.update(Message::Queue(QueueMessage::SlotList(
+            SlotListPageMessage::ScrollDown,
+        )));
+    }
+    let list = &app.queue_page.common.slot_list;
+    assert!(list.viewport_offset > before, "the wheel scrolled the list");
+    assert_eq!(list.selected_offset, None);
+    assert!(list.selected_indices.is_empty());
+    assert_eq!(app.queue_page.common.get_center_item_index(ROWS), None);
+}
+
+/// The mouse wheel keeps a clicked row focused while it scrolls away.
+#[test]
+fn wheel_scroll_keeps_the_clicked_row() {
+    let mut app = app_on_queue();
+    let _ = app.update(Message::Queue(QueueMessage::SlotList(
+        SlotListPageMessage::SetOffset(3, iced::keyboard::Modifiers::default()),
+    )));
+    for _ in 0..8 {
+        let _ = app.update(Message::Queue(QueueMessage::SlotList(
+            SlotListPageMessage::ScrollDown,
+        )));
+    }
+    let list = &app.queue_page.common.slot_list;
+    assert_eq!(list.selected_offset, Some(3));
+    assert_eq!(app.queue_page.common.get_center_item_index(ROWS), Some(3));
 }

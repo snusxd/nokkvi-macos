@@ -157,7 +157,7 @@ impl SettingsPage {
     /// always renders so its `text_input` id survives across renders.
     fn render_sidebar_header(&self) -> Element<'_, SettingsMessage> {
         let title = text("Settings")
-            .size(15.0)
+            .size(crate::theme::fs(15.0))
             .color(theme::fg0())
             .font(theme::weighted_ui_font(Weight::Bold));
 
@@ -232,7 +232,7 @@ impl SettingsPage {
             });
 
         let version = text(concat!("v", env!("CARGO_PKG_VERSION")))
-            .size(10.0)
+            .size(crate::theme::fs(10.0))
             .color(theme::fg3())
             .font(theme::ui_font());
 
@@ -245,7 +245,7 @@ impl SettingsPage {
                         color: Some(theme::fg2()),
                     }),
                 text("Esc")
-                    .size(10.0)
+                    .size(crate::theme::fs(10.0))
                     .color(theme::fg0())
                     .font(theme::weighted_ui_font(Weight::Medium)),
             ]
@@ -410,7 +410,7 @@ impl SettingsPage {
             };
             return container(
                 text(empty_msg)
-                    .size(14)
+                    .size(crate::theme::fs(14))
                     .font(theme::ui_font())
                     .color(theme::fg4()),
             )
@@ -530,6 +530,7 @@ impl SettingsPage {
             super::FONT_SEARCH_INPUT_ID,
             &fsw.search_query,
             window_height,
+            (SettingsMessage::SlotListUp, SettingsMessage::SlotListDown),
             |modal_height, modal_chrome| {
                 if fsw.filtered_fonts.is_empty() {
                     return picker_empty_state("No fonts match the search query");
@@ -579,6 +580,10 @@ impl SettingsPage {
             super::THEME_SEARCH_INPUT_ID,
             &tsw.search_query,
             window_height,
+            (
+                SettingsMessage::SlotListScrollUp,
+                SettingsMessage::SlotListScrollDown,
+            ),
             |modal_height, modal_chrome| {
                 if tsw.filtered_rows.is_empty() {
                     // Distinguish "search matched nothing" from "discovery
@@ -600,9 +605,9 @@ impl SettingsPage {
                     &tsw.slot_list,
                     &tsw.filtered_rows,
                     &config,
-                    SettingsMessage::SlotListUp,
-                    SettingsMessage::SlotListDown,
-                    super::settings_seek_to(tsw.filtered_rows.len()),
+                    SettingsMessage::SlotListScrollUp,
+                    SettingsMessage::SlotListScrollDown,
+                    super::settings_scroll_seek_to(tsw.filtered_rows.len()),
                     None,
                     |row, ctx| {
                         let ctx = SlotRenderContext {
@@ -627,7 +632,7 @@ impl SettingsPage {
 fn picker_empty_state<'a>(msg: &'static str) -> Element<'a, SettingsMessage> {
     container(
         text(msg)
-            .size(14)
+            .size(crate::theme::fs(14))
             .font(theme::ui_font())
             .color(theme::fg4()),
     )
@@ -652,6 +657,7 @@ fn render_picker_modal<'a>(
     search_input_id: &'static str,
     search_query: &'a str,
     window_height: f32,
+    (wheel_up, wheel_down): (SettingsMessage, SettingsMessage),
     build_body: impl FnOnce(f32, f32) -> Element<'a, SettingsMessage>,
 ) -> Element<'a, SettingsMessage> {
     // The modal floats over the settings panel at 70% of window height, minus
@@ -681,7 +687,7 @@ fn render_picker_modal<'a>(
         let content = row![
             Space::new().width(Length::Fixed(12.0)),
             text(title)
-                .size(label_size)
+                .size(crate::theme::fs(label_size))
                 .font(theme::weighted_ui_font(Weight::Bold))
                 .color(theme::fg0()),
             Space::new().width(Length::Fill),
@@ -758,13 +764,13 @@ fn render_picker_modal<'a>(
             }),
     )
     .on_press(SettingsMessage::Escape)
-    .on_scroll(|delta| {
+    .on_scroll(move |delta| {
         let (iced::mouse::ScrollDelta::Lines { y, .. }
         | iced::mouse::ScrollDelta::Pixels { y, .. }) = delta;
         if y > 0.0 {
-            SettingsMessage::SlotListUp
+            wheel_up.clone()
         } else {
-            SettingsMessage::SlotListDown
+            wheel_down.clone()
         }
     })
     .boxed()
@@ -816,7 +822,7 @@ fn render_narrow_chip<'a>(
             color: Some(text_color),
         });
     let label = text(tab.label())
-        .size(text_size)
+        .size(crate::theme::fs(text_size))
         .color(text_color)
         .font(theme::weighted_ui_font(if is_active {
             Weight::Bold
@@ -919,7 +925,7 @@ fn render_sidebar_row<'a>(
     });
 
     let name = text(tab.label())
-        .size(14.0)
+        .size(crate::theme::fs(14.0))
         .color(name_color)
         .font(theme::weighted_ui_font(if is_active {
             Weight::Bold
@@ -927,7 +933,7 @@ fn render_sidebar_row<'a>(
             Weight::Medium
         }));
     let blurb = text(tab.description())
-        .size(10.0)
+        .size(crate::theme::fs(10.0))
         .color(theme::fg3())
         .font(theme::ui_font());
 
@@ -1107,7 +1113,7 @@ fn render_section_pill<'a>(
             color: Some(theme::fg2()),
         });
     let label_widget = text(label.to_uppercase())
-        .size(11.0)
+        .size(crate::theme::fs(11.0))
         .color(theme::fg1())
         .font(theme::weighted_ui_font(Weight::Bold))
         .wrapping(iced::widget::text::Wrapping::None);

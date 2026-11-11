@@ -839,15 +839,24 @@ pub(crate) fn slot_list_view_with_scroll<'a, T, Message: Clone + 'a>(
     let total_items = items.len();
     let row_height = config.row_height();
     let slots = build_slot_list_slots(sl, items, config, &mut render_item, on_hover);
-    let inner: Element<'a, Message> = container(
-        column(slots)
-            .spacing(SLOT_SPACING)
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .boxed();
+    let core: Element<'a, Message> = column(slots)
+        .spacing(SLOT_SPACING)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .boxed();
+    let core = smooth_scroll_wrap(
+        core,
+        sl,
+        items,
+        config,
+        &mut render_item,
+        &on_scroll_up,
+        &on_scroll_down,
+    );
+    let inner: Element<'a, Message> = container(core)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .boxed();
     // Reserve the gutter (Always mode) on the content FIRST, then wrap the
     // whole stack in the wheel `mouse_area`. Order matters: wrapping the
     // mouse_area first and padding it afterward would shrink the wheel
@@ -937,6 +946,15 @@ pub(crate) fn slot_list_view_with_drag<'a, T, Message: Clone + 'a>(
         content_stack = content_stack.push(indicator.boxed());
     }
     let content: Element<'a, Message> = content_stack.boxed();
+    let content = smooth_scroll_wrap(
+        content,
+        sl,
+        items,
+        config,
+        &mut render_item,
+        &on_scroll_up,
+        &on_scroll_down,
+    );
 
     let inner: Element<'a, Message> = container(content)
         .width(Length::Fill)
@@ -980,6 +998,35 @@ fn build_slot_list_slots<'a, T, Message: Clone + 'a>(
     render_item: &mut impl FnMut(&T, SlotListRowContext) -> Element<'a, Message>,
     on_hover: Option<SlotHoverCallback<'a, Message>>,
 ) -> Vec<Element<'a, Message>> {
+    let mut slots = Vec::with_capacity(config.slot_count);
+    for slot_index in 0..config.slot_count {
+        if let Some(slot) = build_slot(
+            sl,
+            items,
+            config,
+            render_item,
+            on_hover.as_ref(),
+            slot_index as isize,
+        ) {
+            slots.push(slot);
+        }
+    }
+
+    slots
+}
+
+/// Build one row of the slot list. `slot_index` may be `-1` or
+/// `config.slot_count` for the rows smooth scrolling draws just outside the
+/// list (see [`build_extra_slot`]); those never carry a hover callback.
+/// `None` means the slot is culled (`config.cull_empty`).
+fn build_slot<'a, T, Message: Clone + 'a>(
+    sl: &SlotListView,
+    items: &[T],
+    config: &SlotListConfig,
+    render_item: &mut impl FnMut(&T, SlotListRowContext) -> Element<'a, Message>,
+    on_hover: Option<&SlotHoverCallback<'a, Message>>,
+    slot_index: isize,
+) -> Option<Element<'a, Message>> {
     let row_height = config.row_height();
     let total_items = items.len();
 
@@ -1005,123 +1052,176 @@ fn build_slot_list_slots<'a, T, Message: Clone + 'a>(
 
     let metrics = SlotListRowMetrics::from_row(row_height, 1.0);
 
-    let mut slots = Vec::with_capacity(config.slot_count);
-    for slot_index in 0..config.slot_count {
-        let opacity = if crate::theme::is_opacity_gradient() {
-            SlotListView::calculate_slot_opacity_with_center(slot_index, effective_center)
-        } else {
-            1.0
-        };
-        let scale_factor = 1.0;
+    let opacity = if crate::theme::is_opacity_gradient() {
+        SlotListView::calculate_slot_opacity_signed(slot_index, effective_center)
+    } else {
+        1.0
+    };
+    let scale_factor = 1.0;
 
-        let mut is_center_slot = false;
+    let mut is_center_slot = false;
 
-        // Resolve the item index through the shared slot→item owner
-        // (`allow_end = false` is the render reject: target >= total_items and
-        // top-packing cap slot < total_items). Top-packing vs end_push are
-        // handled internally, so this is the single source for both rendering
-        // and the drag mappers.
-        let item_index_opt = sl.slot_to_item(
-            slot_index,
-            total_items,
-            config.slot_count,
-            config.center_slot,
-            false,
-        );
+    // Resolve the item index through the shared slot→item owner
+    // (`allow_end = false` is the render reject: target >= total_items and
+    // top-packing cap slot < total_items). Top-packing vs end_push are
+    // handled internally, so this is the single source for both rendering
+    // and the drag mappers.
+    let item_index_opt = sl.slot_to_item_signed(
+        slot_index,
+        total_items,
+        config.slot_count,
+        config.center_slot,
+        false,
+    );
 
-        let slot_content: Element<'a, Message> = if let Some(item_index) = item_index_opt {
-            if let Some(item) = items.get(item_index) {
-                let disable_fallback_center = config.modifiers.shift()
-                    || config.modifiers.control()
-                    || sl.selected_indices.len() > 1;
-                let is_center = match sl.selected_offset {
-                    Some(sel) => item_index == sel,
-                    None => {
-                        if disable_fallback_center {
-                            false
-                        } else {
-                            slot_index == effective_center
-                        }
+    let slot_content: Element<'a, Message> = if let Some(item_index) = item_index_opt {
+        if let Some(item) = items.get(item_index) {
+            let disable_fallback_center = config.modifiers.shift()
+                || config.modifiers.control()
+                || sl.selected_indices.len() > 1
+                || sl.suppress_center_highlight;
+            let is_center = match sl.selected_offset {
+                Some(sel) => item_index == sel,
+                None => {
+                    if disable_fallback_center {
+                        false
+                    } else {
+                        slot_index == effective_center as isize
                     }
-                };
-                is_center_slot = is_center;
-                let is_selected = sl.selected_indices.contains(&item_index);
-                let ctx = SlotListRowContext {
-                    item_index,
-                    is_center,
-                    is_selected,
-                    has_multi_selection: !sl.selected_indices.is_empty(),
-                    opacity,
-                    row_height,
-                    scale_factor,
-                    modifiers: config.modifiers,
-                    metrics,
-                };
-                render_item(item, ctx)
-            } else if config.cull_empty {
-                continue;
-            } else {
-                empty_slot(opacity)
-            }
+                }
+            };
+            is_center_slot = is_center;
+            let is_selected = sl.selected_indices.contains(&item_index);
+            let ctx = SlotListRowContext {
+                item_index,
+                is_center,
+                is_selected,
+                has_multi_selection: !sl.selected_indices.is_empty(),
+                opacity,
+                row_height,
+                scale_factor,
+                modifiers: config.modifiers,
+                metrics,
+            };
+            render_item(item, ctx)
         } else if config.cull_empty {
-            continue;
+            return None;
         } else {
             empty_slot(opacity)
+        }
+    } else if config.cull_empty {
+        return None;
+    } else {
+        empty_slot(opacity)
+    };
+
+    let slot_element = container(slot_content)
+        .width(Length::Fill)
+        .height(Length::Fixed(row_height));
+
+    let flash = if is_center_slot {
+        sl.flash_center_at
+    } else {
+        None
+    };
+
+    let hover_target: Element<'a, Message> =
+        crate::widgets::hover_overlay::HoverOverlay::new(slot_element)
+            .border_radius(slot_list_border_radius())
+            .flash_at(flash)
+            .wash_enabled(config.hover_wash)
+            .press_scale(false)
+            .boxed();
+
+    let wrapped = if let Some(cb) = on_hover {
+        let hovered = match item_index_opt {
+            Some(item_index) => HoveredSlot::Item {
+                slot_index: slot_index as usize,
+                item_index,
+                items_len: total_items,
+            },
+            None => HoveredSlot::Empty {
+                slot_index: slot_index as usize,
+                items_len: total_items,
+            },
         };
+        let enter_msg = (cb.on_enter)(hovered);
+        let exit_msg = (cb.on_exit)(hovered);
+        // `on_move` republishes the enter payload on every CursorMoved
+        // while the cursor is inside the slot. The iced mouse_area diff
+        // only fires `on_enter`/`on_exit` on a bounds- OR position-change
+        // crossing, so a cursor-stationary scroll (viewport_offset shift)
+        // would otherwise leave `hovered_slot` referencing the
+        // pre-scroll `item_index`. With `on_move`, any cursor twitch
+        // after the scroll re-bakes the message with the current
+        // render's `item_index` and refreshes state.
+        let move_msg = enter_msg.clone();
+        mouse_area(hover_target)
+            .on_enter(enter_msg)
+            .on_exit(exit_msg)
+            .on_move(move |_pt| move_msg.clone())
+            .boxed()
+    } else {
+        hover_target
+    };
+    Some(wrapped)
+}
 
-        let slot_element = container(slot_content)
-            .width(Length::Fill)
-            .height(Length::Fixed(row_height));
-
-        let flash = if is_center_slot {
-            sl.flash_center_at
-        } else {
-            None
-        };
-
-        let hover_target: Element<'a, Message> =
-            crate::widgets::hover_overlay::HoverOverlay::new(slot_element)
-                .border_radius(slot_list_border_radius())
-                .flash_at(flash)
-                .wash_enabled(config.hover_wash)
-                .boxed();
-
-        let wrapped = if let Some(cb) = on_hover.as_ref() {
-            let hovered = match item_index_opt {
-                Some(item_index) => HoveredSlot::Item {
-                    slot_index,
-                    item_index,
-                    items_len: total_items,
-                },
-                None => HoveredSlot::Empty {
-                    slot_index,
-                    items_len: total_items,
-                },
-            };
-            let enter_msg = (cb.on_enter)(hovered);
-            let exit_msg = (cb.on_exit)(hovered);
-            // `on_move` republishes the enter payload on every CursorMoved
-            // while the cursor is inside the slot. The iced mouse_area diff
-            // only fires `on_enter`/`on_exit` on a bounds- OR position-change
-            // crossing, so a cursor-stationary scroll (viewport_offset shift)
-            // would otherwise leave `hovered_slot` referencing the
-            // pre-scroll `item_index`. With `on_move`, any cursor twitch
-            // after the scroll re-bakes the message with the current
-            // render's `item_index` and refreshes state.
-            let move_msg = enter_msg.clone();
-            mouse_area(hover_target)
-                .on_enter(enter_msg)
-                .on_exit(exit_msg)
-                .on_move(move |_pt| move_msg.clone())
-                .boxed()
-        } else {
-            hover_target
-        };
-
-        slots.push(wrapped);
+/// Wrap the slot list `core` for pixel-delta scrolling when the user has
+/// Smooth Trackpad Scroll on, else hand it back untouched.
+///
+/// The wrapper stacks one extra row above and below the list and slides the
+/// stack by the glide's sub-row offset (see `smooth_scroll.rs`). The list
+/// itself keeps its exact structure, so the drag column's slot indices and the
+/// drop indicator's geometry are unchanged.
+fn smooth_scroll_wrap<'a, T, Message: Clone + 'a>(
+    core: Element<'a, Message>,
+    sl: &SlotListView,
+    items: &[T],
+    config: &SlotListConfig,
+    render_item: &mut impl FnMut(&T, SlotListRowContext) -> Element<'a, Message>,
+    on_scroll_up: &Message,
+    on_scroll_down: &Message,
+) -> Element<'a, Message> {
+    if !theme::is_smooth_trackpad_scroll() {
+        return core;
     }
+    let above = build_extra_slot(sl, items, config, render_item, -1);
+    let below = build_extra_slot(sl, items, config, render_item, config.slot_count as isize);
+    let content: Element<'a, Message> = column![above, core, below]
+        .spacing(SLOT_SPACING)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .boxed();
+    let (can_up, can_down) = sl.can_scroll(items.len());
+    crate::widgets::smooth_scroll::SmoothScroll::new(
+        content,
+        config.row_height() + SLOT_SPACING,
+        can_up,
+        can_down,
+        on_scroll_up.clone(),
+        on_scroll_down.clone(),
+    )
+    .boxed()
+}
 
-    slots
+/// A row just outside the list (`slot_index` `-1` above, `slot_count` below),
+/// drawn so the row sliding into view during a smooth scroll is already there.
+/// A culled or absent slot becomes an equally tall blank, so the content's
+/// structure and height do not depend on the data.
+fn build_extra_slot<'a, T, Message: Clone + 'a>(
+    sl: &SlotListView,
+    items: &[T],
+    config: &SlotListConfig,
+    render_item: &mut impl FnMut(&T, SlotListRowContext) -> Element<'a, Message>,
+    slot_index: isize,
+) -> Element<'a, Message> {
+    build_slot(sl, items, config, render_item, None, slot_index).unwrap_or_else(|| {
+        container(iced::widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(config.row_height()))
+            .boxed()
+    })
 }
 
 /// Wrap a slot list view element with scroll event handling.
@@ -1161,7 +1261,7 @@ pub(crate) fn slot_list_text<'a>(
     };
 
     text(content.into())
-        .size(size)
+        .size(crate::theme::fs(size))
         .color(color)
         .font(theme::ui_font())
         .wrapping(Wrapping::None)
@@ -1530,6 +1630,11 @@ pub struct SlotListChrome {
     /// Auto-hide collapse state, with an open header menu holding the header
     /// expanded. Always `false` for pages whose header never collapses.
     pub toolbar_collapsed: bool,
+    /// Auto-hide is on and this page's header collapses: the header is drawn
+    /// over the list's bottom (`header_reserve`) instead of sharing the
+    /// column, so the slot count is sized against the collapsed band whatever
+    /// the reveal state and revealing never resizes a row.
+    pub toolbar_overlay: bool,
     /// Whether the multi-select column's select-all bar is showing.
     pub select_visible: bool,
 }
@@ -1540,7 +1645,22 @@ impl SlotListChrome {
     /// `BaseSlotListLayoutConfig.slot_list_chrome`. A new bar stacked above a
     /// library page's list is counted here.
     pub(crate) fn height(&self) -> f32 {
-        chrome_height_with_select_header(self.toolbar_collapsed, self.select_visible)
+        chrome_height_with_select_header(
+            self.toolbar_collapsed || self.toolbar_overlay,
+            self.select_visible,
+        )
+    }
+
+    /// Band the layout keeps for the header when it is drawn over the list.
+    pub(crate) fn header_reserve(&self) -> Option<f32> {
+        self.toolbar_overlay.then(|| {
+            collapsed_view_header_chrome()
+                + if self.select_visible {
+                    SELECT_HEADER_HEIGHT
+                } else {
+                    0.0
+                }
+        })
     }
 
     /// The chrome plus the artwork stacked above the list at this pane size:
@@ -1561,6 +1681,7 @@ impl SlotListChrome {
                 window_height: self.pane_height,
                 show_artwork_column: true,
                 slot_list_chrome: chrome,
+                header_reserve: None,
                 bleed: crate::widgets::base_slot_list_layout::ArtworkBleed::NONE,
             })
     }
@@ -1759,7 +1880,7 @@ pub(crate) fn slot_list_text_column<'a, Message: Clone + 'a + 'static>(
 
     let title_widget: Element<'a, Message> = if let Some(msg) = title_on_press {
         crate::widgets::link_text::LinkText::new(title)
-            .size(title_size)
+            .size(crate::theme::fs(title_size))
             .color(style.text_color)
             .hover_color(style.hover_text_color)
             .font(title_font)
@@ -1767,7 +1888,7 @@ pub(crate) fn slot_list_text_column<'a, Message: Clone + 'a + 'static>(
             .boxed()
     } else {
         iced::widget::text(title)
-            .size(title_size)
+            .size(crate::theme::fs(title_size))
             .color(style.text_color)
             .font(title_font)
             .wrapping(Wrapping::None)
@@ -1789,7 +1910,7 @@ pub(crate) fn slot_list_text_column<'a, Message: Clone + 'a + 'static>(
 
     let subtitle_widget: Element<'a, Message> = if let Some(msg) = subtitle_on_press {
         crate::widgets::link_text::LinkText::new(subtitle)
-            .size(subtitle_size)
+            .size(crate::theme::fs(subtitle_size))
             .color(style.subtext_color)
             .hover_color(style.hover_text_color)
             .font(theme::ui_font())
@@ -1826,7 +1947,7 @@ pub(crate) fn slot_list_metadata_column<'a, Message: Clone + 'a + 'static>(
     let text_widget: Element<'a, Message> =
         if let Some(msg) = on_press.filter(|_| crate::theme::is_slot_text_links()) {
             crate::widgets::link_text::LinkText::new(content)
-                .size(font_size)
+                .size(crate::theme::fs(font_size))
                 .color(style.subtext_color)
                 .hover_color(style.hover_text_color)
                 .font(theme::ui_font())
@@ -2114,7 +2235,7 @@ fn empty_slot<'a, Message: 'a>(opacity: f32) -> Element<'a, Message> {
 
     container(
         iced::widget::text("· · ·")
-            .size(14)
+            .size(crate::theme::fs(14))
             .color(Color {
                 a: opacity * 0.4,
                 ..theme::fg4()

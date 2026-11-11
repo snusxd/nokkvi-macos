@@ -395,7 +395,12 @@ fn trigger_button<'a, Message: 'a>(
 
     tooltip(
         with_hover,
-        container(text(tooltip_text).size(11.0).font(theme::ui_font())).padding(4),
+        container(
+            text(tooltip_text)
+                .size(crate::theme::fs(11.0))
+                .font(theme::ui_font()),
+        )
+        .padding(4),
         tooltip::Position::Top,
     )
     .gap(4)
@@ -417,7 +422,7 @@ fn dropdown_item<'a, Message: Clone + 'a>(
     let row_content = row![
         check_element,
         text(label.to_string())
-            .size(MENU_TEXT_SIZE)
+            .size(crate::theme::fs(MENU_TEXT_SIZE))
             .font(theme::ui_font())
             .color(theme::fg0()),
     ]
@@ -472,7 +477,7 @@ fn dropdown_item_two_column<'a, Message: Clone + 'a>(
     let check_element = super::checkbox_glyph::element::<Message>(checked);
 
     let name_text = text(name.to_string())
-        .size(MENU_TEXT_SIZE)
+        .size(crate::theme::fs(MENU_TEXT_SIZE))
         .font(theme::ui_font())
         .color(theme::fg0())
         .width(Length::Fixed(MAX_NAME_WIDTH))
@@ -480,7 +485,7 @@ fn dropdown_item_two_column<'a, Message: Clone + 'a>(
         .ellipsis(iced::widget::text::Ellipsis::End);
 
     let right_text = text(right_label.to_string())
-        .size(MENU_TEXT_SIZE)
+        .size(crate::theme::fs(MENU_TEXT_SIZE))
         .font(theme::ui_font())
         .color(theme::fg2());
 
@@ -542,7 +547,7 @@ fn dropdown_item_action<'a, Message: Clone + 'a>(
 
     let mut text_col = column![
         text(label.to_string())
-            .size(MENU_TEXT_SIZE)
+            .size(crate::theme::fs(MENU_TEXT_SIZE))
             .font(theme::weighted_ui_font(iced::font::Weight::Medium))
             .color(theme::fg0()),
     ]
@@ -550,7 +555,7 @@ fn dropdown_item_action<'a, Message: Clone + 'a>(
     if !subtitle.is_empty() {
         text_col = text_col.push(
             text(subtitle.to_string())
-                .size(MENU_TEXT_SIZE - 2.0)
+                .size(crate::theme::fs(MENU_TEXT_SIZE - 2.0))
                 .font(theme::ui_font())
                 .color(theme::fg2())
                 .boxed(),
@@ -656,12 +661,12 @@ where
 /// padding profile as the data rows so the two read as one stack.
 fn dropdown_header_row<'a, Message: 'a>(label: &str, counter: &str) -> Element<'a, Message> {
     let label_text = text(label.to_string())
-        .size(MENU_TEXT_SIZE)
+        .size(crate::theme::fs(MENU_TEXT_SIZE))
         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
         .color(theme::fg0());
 
     let counter_text = text(counter.to_string())
-        .size(MENU_TEXT_SIZE)
+        .size(crate::theme::fs(MENU_TEXT_SIZE))
         .font(theme::ui_font())
         .color(theme::fg2());
 

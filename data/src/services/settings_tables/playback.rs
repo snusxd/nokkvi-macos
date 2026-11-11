@@ -25,11 +25,11 @@ use crate::{
             BitPerfectMode, CROSSFADE_DURATION_MAX_SECS, CROSSFADE_DURATION_MIN_SECS,
             CROSSFADE_MIN_TRACK_MAX_SECS, CROSSFADE_MIN_TRACK_MIN_SECS, CROSSFADE_OFFSET_MAX_SECS,
             CROSSFADE_OFFSET_MIN_SECS, CrossfadeCurve, FADE_SKIP_SECS_MAX, FADE_SKIP_SECS_MIN,
-            FadeOnSkip, LyricsAlignment, LyricsBackdropBlur, LyricsMode, LyricsWordHighlight,
-            NormalizationLevel, RATING_REMINDER_PERCENT_MAX, RATING_REMINDER_PERCENT_MIN,
-            RatingReminderTrigger, RoundedMode, SCROBBLE_THRESHOLD_PCT_MAX,
-            SCROBBLE_THRESHOLD_PCT_MIN, TRANSPORT_FADE_MS_MAX, TRANSPORT_FADE_MS_MIN,
-            VolumeNormalizationMode,
+            FadeOnSkip, LYRICS_FONT_SIZE_PX_MAX, LYRICS_FONT_SIZE_PX_MIN, LyricsAlignment,
+            LyricsBackdropBlur, LyricsMode, LyricsWordHighlight, NormalizationLevel,
+            RATING_REMINDER_PERCENT_MAX, RATING_REMINDER_PERCENT_MIN, RatingReminderTrigger,
+            RoundedMode, SCROBBLE_THRESHOLD_PCT_MAX, SCROBBLE_THRESHOLD_PCT_MIN,
+            TRANSPORT_FADE_MS_MAX, TRANSPORT_FADE_MS_MIN, VolumeNormalizationMode,
         },
         settings_data::PlaybackSettingsData,
     },
@@ -171,6 +171,28 @@ define_settings! {
                 default: "Center",
                 options: LyricsAlignment::LABELS,
                 read_field: |d| d.lyrics_alignment.as_ref(),
+            },
+        },
+        LyricsFontSizePx {
+            key: "general.lyrics_font_size_px",
+            value_type: Int,
+            setter: |mgr, v: i64| mgr.set_lyrics_font_size_px(v as u32),
+            toml_apply: |ts, p| p.lyrics_font_size_px = ts.lyrics_font_size_px,
+            read: |src, out| out.lyrics_font_size_px = src.lyrics_font_size_px,
+            write: |ps, ts| ts.lyrics_font_size_px = ps.lyrics_font_size_px,
+            ui_meta: {
+                label: "Lyrics: Font Size",
+                category: "Playback",
+                subtitle: Some(
+                    "Size of the lyric text on the Queue cover and in Theater Mode; \
+                     16px is the designed size. It still grows with a larger panel.",
+                ),
+                default: 16_i64,
+                min: i64::from(LYRICS_FONT_SIZE_PX_MIN),
+                max: i64::from(LYRICS_FONT_SIZE_PX_MAX),
+                step: 1_i64,
+                unit: "px",
+                read_field: |d| d.lyrics_font_size_px,
             },
         },
         BitPerfect {
@@ -981,6 +1003,7 @@ mod tests {
             lyrics_backdrop_blur: "Off".into(),
             lyrics_word_highlight: "Sweep".into(),
             lyrics_alignment: "Center".into(),
+            lyrics_font_size_px: 16,
             bit_perfect: "Off".into(),
             crossfade_duration_secs: 5,
             crossfade_curve: "Equal Power".into(),
@@ -1046,7 +1069,7 @@ mod tests {
     fn build_playback_tab_settings_items_emits_the_pinned_row_count() {
         let data = default_playback_data();
         let entries = build_playback_tab_settings_items(&data);
-        assert_eq!(entries.len(), 36);
+        assert_eq!(entries.len(), 37);
         for e in &entries {
             assert!(matches!(e, SettingsEntry::Item(_)));
         }
@@ -1896,6 +1919,7 @@ mod tests {
             lyrics_backdrop_blur: live.lyrics_backdrop_blur.as_label().into(),
             lyrics_word_highlight: live.lyrics_word_highlight.as_label().into(),
             lyrics_alignment: live.lyrics_alignment.as_label().into(),
+            lyrics_font_size_px: i64::from(live.lyrics_font_size_px),
             bit_perfect: live.bit_perfect.as_label().into(),
             crossfade_duration_secs: i64::from(live.crossfade_duration_secs),
             crossfade_curve: live.crossfade_curve.as_label().into(),

@@ -32,6 +32,67 @@ pub struct TheaterState {
     /// Wayland the mode query answers from the compositor's last reply, so a
     /// re-entry right after an exit can read the fullscreen being undone.
     pub restore_sent: Option<(iced::window::Mode, Instant)>,
+    /// The enter / leave animation in flight, if any.
+    pub reveal: Option<Reveal>,
+    /// Where the Queue's cover panel sat on screen when theater was entered
+    /// (`None`: no cover was in view), kept for the leave animation to shrink
+    /// back to.
+    pub cover_rect: Option<iced::Rectangle>,
+    /// The cover (and lyrics) rolling over to the next or previous track.
+    pub roll: Option<TrackRoll>,
+}
+
+/// Which way a track change rolls the cover and the lyrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollDirection {
+    /// The next track: the old cover rolls down and out, the new one arrives
+    /// from above.
+    Next,
+    /// The previous track: the same motion the other way.
+    Previous,
+}
+
+/// A track change being animated in Theater Mode.
+#[derive(Debug, Clone)]
+pub struct TrackRoll {
+    pub since: Instant,
+    pub direction: RollDirection,
+    /// The cover that was showing, rolling out (`None`: it had no picture).
+    pub old_cover: Option<iced::widget::image::Handle>,
+    /// The lyric sheet that was showing, dissolving out as the new one comes
+    /// in (`None`: no sheet was on screen).
+    pub old_lyrics: Option<OldLyrics>,
+}
+
+/// A lyric sheet kept from before a track change, with the column center it
+/// had, so the dissolve can fade it out in place.
+#[derive(Debug, Clone)]
+pub struct OldLyrics {
+    pub lines: Vec<nokkvi_data::types::lyrics::LrcLine>,
+    pub synced: bool,
+    /// Column center in slot-index space, frozen at the change.
+    pub center: f32,
+}
+
+/// Which way the theater panel is moving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevealKind {
+    /// Growing from the cover (or rising from below the window) to fill it.
+    Enter,
+    /// Shrinking back to the cover (or sinking below the window).
+    Leave,
+}
+
+/// One enter / leave animation of the theater panel. `rect` is the panel's
+/// resting place on the other end: the cover's on-screen rectangle, or `None`
+/// for "below the window" when no cover was in view.
+#[derive(Debug, Clone, Copy)]
+pub struct Reveal {
+    pub kind: RevealKind,
+    /// When the motion began; `None` while an entry still waits for the
+    /// cover's bounds to be read (nothing is drawn yet).
+    pub since: Option<Instant>,
+    pub rect: Option<iced::Rectangle>,
 }
 
 impl Default for TheaterState {
@@ -48,6 +109,9 @@ impl Default for TheaterState {
             },
             prior_window_mode: None,
             restore_sent: None,
+            reveal: None,
+            cover_rect: None,
+            roll: None,
         }
     }
 }

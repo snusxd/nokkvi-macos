@@ -56,6 +56,21 @@ define_settings! {
                 read_field: |d| d.stable_viewport,
             },
         },
+        SmoothTrackpadScroll {
+            key: "general.smooth_trackpad_scroll",
+            value_type: Bool,
+            setter: |mgr, v: bool| mgr.set_smooth_trackpad_scroll(v),
+            toml_apply: |ts, p| p.smooth_trackpad_scroll = ts.smooth_trackpad_scroll,
+            read: |src, out| out.smooth_trackpad_scroll = src.smooth_trackpad_scroll,
+            write: |ps, ts| ts.smooth_trackpad_scroll = ps.smooth_trackpad_scroll,
+            ui_meta: {
+                label: "Smooth Trackpad Scroll",
+                category: "Mouse Behavior",
+                subtitle: Some("Trackpad scrolling glides by pixels and settles onto the row grid"),
+                default: true,
+                read_field: |d| d.smooth_trackpad_scroll,
+            },
+        },
         StartView {
             key: "general.start_view",
             value_type: Enum,
@@ -825,6 +840,7 @@ mod tests {
             username: "admin".into(),
             start_view: "Harbour".into(),
             stable_viewport: true,
+            smooth_trackpad_scroll: true,
             auto_follow_playing: true,
             enter_behavior: "Play All".into(),
             enter_shuffle: false,
@@ -845,13 +861,13 @@ mod tests {
     }
 
     /// Macro-emitted helper returns one entry per ui_meta-bearing setting.
-    /// 18 of the 19 declared keys carry ui_meta — light_mode does not (it
-    /// renders on the Theme tab, not General), so the helper emits 18 rows.
+    /// 19 of the 20 declared keys carry ui_meta — light_mode does not (it
+    /// renders on the Theme tab, not General), so the helper emits 19 rows.
     #[test]
     fn build_general_tab_settings_items_emits_one_row_per_ui_meta_entry() {
         let data = default_general_data();
         let entries = build_general_tab_settings_items(&data);
-        assert_eq!(entries.len(), 18);
+        assert_eq!(entries.len(), 19);
         // Every emitted entry is a Item, never a Header — section headers
         // live in the UI crate's hand-written builder.
         for e in &entries {
@@ -958,6 +974,7 @@ mod tests {
             username: "".into(),
             start_view: live.start_view.clone().into(),
             stable_viewport: live.stable_viewport,
+            smooth_trackpad_scroll: live.smooth_trackpad_scroll,
             auto_follow_playing: live.auto_follow_playing,
             enter_behavior: live.enter_behavior.as_label().into(),
             enter_shuffle: live.enter_shuffle,

@@ -22,7 +22,7 @@ use iced::{
 };
 use nokkvi_data::types::player_settings::NavDisplayMode;
 
-use super::nav_bar::{NAV_TABS, NavBarMessage, NavFocus, NavView, colored_icon, nav_tab_colors};
+use super::nav_bar::{NavBarMessage, NavFocus, NavTabOrder, NavView, colored_icon, nav_tab_colors};
 use crate::theme;
 
 /// Side-nav width (px) by chrome mode.
@@ -93,6 +93,8 @@ fn side_nav_tab_width() -> f32 {
 /// Data passed to the side nav bar for rendering
 pub(crate) struct SideNavBarData {
     pub current_view: NavView,
+    /// The tabs' order (`general.nav_tab_order`); dragging a tab changes it.
+    pub tab_order: NavTabOrder,
     /// The keyboard-highlighted item (Focus Navigation), drawn as an inverted
     /// chip (`nav_tab_colors`).
     pub nav_focus: Option<NavFocus>,
@@ -518,12 +520,24 @@ pub(crate) fn side_nav_bar(data: SideNavBarData) -> Element<'static, NavBarMessa
         .spacing(stack_spacing)
         .width(Length::Fixed(nav_width))
         .height(Length::Fill);
-    for &(label, icon_path, view) in NAV_TABS {
+    // The tabs ride in a vertical `DragStrip`: press and drag one up or down
+    // to move it (`ReorderTabs`). Each cell carries its trailing rule, and
+    // the cell's inner spacing matches the strip's, so the gaps are the ones
+    // the tabs had as direct children of this column. The strip takes one
+    // `FillPortion(1)` share per tab, as the tabs did beside the Settings /
+    // Editing cells.
+    let mut strip = super::drag_strip::DragStrip::new(super::drag_strip::StripAxis::Vertical)
+        .spacing(stack_spacing)
+        .width(Length::Fixed(nav_width))
+        .height(Length::FillPortion(super::nav_bar::TAB_COUNT_PORTION))
+        .on_reorder(|from, to| NavBarMessage::ReorderTabs { from, to });
+    for &view in data.tab_order.views() {
+        let (label, icon_path) = view.tab();
         // No regular tab is active while editing — the editor cell carries the
         // active state (current_view falls back to Queue for the editor view).
         let is_active = !settings_open && !editor_active && !harbour_active && current == view;
-        tabs = tabs
-            .push(wrap_in_gutter(
+        let cell = column![
+            wrap_in_gutter(
                 nav_tab(
                     label,
                     icon_path,
@@ -533,9 +547,15 @@ pub(crate) fn side_nav_bar(data: SideNavBarData) -> Element<'static, NavBarMessa
                 ),
                 is_rounded,
                 nav_width,
-            ))
-            .push(separator());
+            ),
+            separator(),
+        ]
+        .spacing(stack_spacing)
+        .width(Length::Fixed(nav_width))
+        .height(Length::FillPortion(1));
+        strip = strip.push(cell.boxed());
     }
+    tabs = tabs.push(strip.boxed());
 
     if let Some(indicator) = settings_indicator {
         tabs = tabs

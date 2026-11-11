@@ -68,7 +68,7 @@ pub(crate) fn search_bar<'a, Message: Clone + 'a>(
             bottom: 8.0,
             left: 32.0,
         })
-        .size(12.0)
+        .size(crate::theme::fs(12.0))
         .font(theme::weighted_ui_font(Weight::Medium))
         .style(style.unwrap_or(flat_search_input_style));
 

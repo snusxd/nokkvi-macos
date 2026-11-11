@@ -33,6 +33,7 @@ mod atomic_u8_enum;
 mod config_writer;
 mod embedded_svg;
 mod hotkeys;
+mod process_liveness;
 mod services;
 mod state;
 #[cfg(test)]
@@ -48,7 +49,9 @@ mod widgets;
 use std::time::Duration;
 
 pub use app_message::Message;
-use iced::{Event, Task, Theme, event, keyboard, time, window::settings::PlatformSpecific};
+#[cfg(target_os = "linux")]
+use iced::window::settings::PlatformSpecific;
+use iced::{Event, Task, Theme, event, keyboard, time};
 use nokkvi_data::{backend::app_service::AppService, types::hotkey_config::HotkeyConfig};
 use tracing::debug;
 
@@ -336,6 +339,8 @@ pub struct Nokkvi {
     pub boat: crate::widgets::boat::BoatState,
     /// The Harbour Trawl panel's longship + procedural sea.
     pub harbour_scene: crate::state::HarbourScene,
+    /// The Cover Beat visualizer's swell (`update/cover_beat.rs`).
+    pub cover_beat: crate::state::CoverPulse,
 
     // -------------------------------------------------------------------------
     // MPRIS D-Bus Integration
@@ -520,6 +525,7 @@ impl Default for Nokkvi {
                 scrobble_threshold: 0.50,
                 start_view: "Harbour".to_string(),
                 stable_viewport: true,
+                smooth_trackpad_scroll: true,
                 auto_follow_playing: true,
                 similar_artists_online: true,
                 similar_artists_deezer: true,
@@ -565,6 +571,7 @@ impl Default for Nokkvi {
             visualizer_config: crate::visualizer_config::create_shared_config(),
             boat: crate::widgets::boat::BoatState::default(),
             harbour_scene: crate::state::HarbourScene::default(),
+            cover_beat: crate::state::CoverPulse::default(),
             mpris_connection: None,
             last_mpris_position_us: 0,
             mpris_track: services::mpris::PublishedTrack::default(),
@@ -760,18 +767,27 @@ impl Nokkvi {
         };
 
         // MPRIS D-Bus server for Linux desktop integration
+        #[cfg(target_os = "linux")]
         let mpris = iced::Subscription::run(services::mpris::run).map(Message::Mpris);
+        // macOS: Now Playing + media keys through souvlaki, same event types.
+        #[cfg(target_os = "macos")]
+        let mpris = iced::Subscription::run(services::mpris_macos::run).map(Message::Mpris);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let mpris = iced::Subscription::none();
 
         // System tray (StatusNotifierItem). Conditionally spawned: when the
         // user toggles `show_tray_icon` off, the subscription disappears
         // from the batch and iced cancels it, which drops its event
         // receiver; the tray thread sees that and tears down the ksni
         // service (see `services::tray::pump_commands`).
+        #[cfg(target_os = "linux")]
         let tray = if self.settings.show_tray_icon {
             iced::Subscription::run(services::tray::run).map(Message::Tray)
         } else {
             iced::Subscription::none()
         };
+        #[cfg(not(target_os = "linux"))]
+        let tray = iced::Subscription::none();
 
         // Rating desktop notifications (the rate-reminder AND the rate-change
         // confirmation share one service). Conditionally spawned like the tray:
@@ -780,6 +796,7 @@ impl Nokkvi {
         // connection. So we never hold a session-bus connection unless at least
         // one feature is on. Each feature still gates its own sends, so the
         // shared connection only carries the commands the user opted into.
+        #[cfg(target_os = "linux")]
         let notifications = if self.settings.rating_reminder_enabled
             || self.settings.rating_change_notification_enabled
             || self.settings.love_change_notification_enabled
@@ -788,6 +805,8 @@ impl Nokkvi {
         } else {
             iced::Subscription::none()
         };
+        #[cfg(not(target_os = "linux"))]
+        let notifications = iced::Subscription::none();
 
         // Window lifecycle: capture the main window's id on first open and
         // intercept close-button presses so we can branch on the
@@ -1436,6 +1455,8 @@ pub fn main() -> iced::Result {
     // explicitly — never lean on the daemon default.
     if let Ok(Some(settings)) = nokkvi_data::services::toml_settings_io::read_toml_settings() {
         theme::set_font_family(settings.font_family);
+        theme::set_font_size_px(settings.font_size_px);
+        theme::set_font_weight(settings.font_weight);
     }
 
     // `.settings()` replaces the whole struct, so it comes before the
@@ -1860,6 +1881,7 @@ fn boot() -> (Nokkvi, Task<Message>) {
 /// fresh one.
 pub(crate) fn main_window_settings() -> iced::window::Settings {
     iced::window::Settings {
+        #[cfg(target_os = "linux")]
         platform_specific: PlatformSpecific {
             application_id: "org.nokkvi.nokkvi".to_string(),
             ..Default::default()

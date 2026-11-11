@@ -69,7 +69,7 @@ fn highlighted_label<'a>(
 ) -> Element<'a, SettingsMessage> {
     let seg = |s: String, color: Color, w: Weight| {
         text(s)
-            .size(size)
+            .size(crate::theme::fs(size))
             .font(theme::weighted_ui_font(w))
             .color(color)
             .wrapping(Wrapping::None)
@@ -185,7 +185,7 @@ fn render_hex_editor<'a>(
         .id(super::HEX_EDITOR_INPUT_ID)
         .on_input(SettingsMessage::HexInputChanged)
         .on_submit(SettingsMessage::HexInputSubmit)
-        .size(font_size)
+        .size(crate::theme::fs(font_size))
         .width(Length::Fill)
         .font(theme::weighted_ui_font(Weight::Medium));
 
@@ -418,6 +418,52 @@ fn render_numeric_row<'a>(
         .push(right_arrow);
 
     layout.boxed()
+}
+
+/// Keys of the px rows (Font Size, Lyrics: Font Size), which draw as a
+/// `[ − | 14px | + ]` stepper instead of the slider row the other numeric
+/// settings use.
+const STEPPER_KEYS: [&str; 2] = ["general.font_size_px", "general.lyrics_font_size_px"];
+
+/// `[ − | value | + ]`: one connected control of a minus button, the value
+/// badge and a plus button, with no slider. As on every numeric row the
+/// buttons act on the focused row only (`EditLeft` / `EditRight`).
+fn render_stepper_row<'a>(
+    value: &SettingValue,
+    font_size: f32,
+    is_center: bool,
+    opacity: f32,
+) -> Element<'a, SettingsMessage> {
+    let eff_opacity = if is_center { 1.0 } else { opacity };
+    let minus = arrow_button(
+        "assets/icons/minus.svg",
+        font_size,
+        is_center,
+        eff_opacity,
+        SettingsMessage::EditLeft,
+    );
+    let plus = arrow_button(
+        "assets/icons/plus.svg",
+        font_size,
+        is_center,
+        eff_opacity,
+        SettingsMessage::EditRight,
+    );
+    row![
+        minus,
+        Space::new().width(Length::Fixed(8.0)),
+        render_badge(
+            value.display(),
+            font_size,
+            is_center,
+            opacity,
+            Some(NUMERIC_BADGE_WIDTH)
+        ),
+        Space::new().width(Length::Fixed(8.0)),
+        plus,
+    ]
+    .align_y(Alignment::Center)
+    .boxed()
 }
 
 /// 22×22 flat arrow button — 1 px [`theme::border()`] outline, [`theme::bg0()`]
@@ -1230,7 +1276,7 @@ pub(crate) fn render_detail_header<'a>(
         });
 
     let label_widget = text(label_text)
-        .size(font_size)
+        .size(crate::theme::fs(font_size))
         .font(theme::weighted_ui_font(Weight::Bold))
         .color(theme::fg1())
         .wrapping(Wrapping::None);
@@ -1376,7 +1422,7 @@ pub(crate) fn render_detail_row<'a>(
     if let Some(help) = item.subtitle.as_ref() {
         label_col = label_col.push(
             text(help.to_string())
-                .size(help_size)
+                .size(crate::theme::fs(help_size))
                 .color(theme::fg3())
                 .font(theme::ui_font())
                 .boxed(),
@@ -1388,14 +1434,17 @@ pub(crate) fn render_detail_row<'a>(
         .align_y(Alignment::Center);
 
     let show_hint = item_needs_enter_hint(item) && is_focused && !is_editing && !is_capturing;
-    let value_widget =
-        render_value_display(&item.value, value_size, &style, &ctx, is_editing, hex_input);
+    let value_widget = if STEPPER_KEYS.contains(&item.key.as_ref()) {
+        render_stepper_row(&item.value, value_size, ctx.is_center, ctx.opacity)
+    } else {
+        render_value_display(&item.value, value_size, &style, &ctx, is_editing, hex_input)
+    };
     let value_block: Element<'a, SettingsMessage> = if show_hint {
         row![
             value_widget,
             Space::new().width(Length::Fixed(8.0)),
             text("Enter ↵")
-                .size(hint_size)
+                .size(crate::theme::fs(hint_size))
                 .color(theme::fg3())
                 .font(theme::ui_font()),
         ]

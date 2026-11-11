@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Nokkvi is a native Rust/Iced desktop client for Navidrome music servers. **Linux-only** (built/tested on Arch + Wayland/Hyprland with PipeWire). The codebase is AI-generated and AI-maintained — the human owner directs and tests but does not write code.
+Nokkvi is a native Rust/Iced desktop client for Navidrome music servers. Built and tested on Arch + Wayland/Hyprland with PipeWire; a macOS port is in progress (the `macos-port` skill owns its rules and overrides "Linux-only" wording elsewhere). The codebase is AI-generated and AI-maintained — the human owner directs and tests but does not write code.
 
 ## Common commands
 
@@ -145,9 +145,11 @@ Test placement: `update/tests/` for handler tests; inline `#[cfg(test)] mod test
 - **Database lock on re-login**: `StateStorage` is cached on `Nokkvi.cached_storage` and reused via `AppService::new_with_storage()` — redb holds an exclusive lock so a fresh open after logout will fail. Stop the engine + `TaskManager` on logout.
 - **`CenterOnPlaying` (Shift+C)**: call `handle_set_offset()` directly. Dispatching `SlotListMessage::SetOffset` routes through the click-to-highlight path instead.
 
-The full rule set lives in `.claude/rules/` and **auto-injects**: `code-standards.md` loads in every session; the rest are path-scoped and inject once per session, on the first Read/Edit/Write (or single-file `cat`/`head`) of a file matching their `paths:` globs, and again after /compact only once a matching file is touched (`audio-engine.md` — engine internals, crossfade, EQ; `backend-services.md` — services, persistence, queue system; `ui-views.md` — slot list views, expansion, browsing panel, handler plumbing; `ui-queue.md`, `ui-lyrics.md`, `ui-artists.md`, `ui-radio-artwork.md`, `ui-window.md` (modals, Theater Mode, artwork bleed, tray) — one view area each; `widgets.md` — widget catalog, layout constants, menu/modal chrome, SVG icons; `visualizer.md` — FFT pipeline, shaders, effects; `settings-view.md` — settings module structure, SettingValue types; `gotchas/*.md` — the subtle pitfalls, one file per area). Subagents get the same injection on their own reads, but the built-in Explore and Plan agents skip CLAUDE.md and `code-standards.md`: restate what they need in the prompt, or have them Read the rule files.
+The full rule set lives in `.claude/rules/` and **auto-injects**: `code-standards.md` loads in every session; the rest are path-scoped and inject once per session, on the first Read/Edit/Write (or single-file `cat`/`head`) of a file matching their `paths:` globs, and again after /compact only once a matching file is touched (`audio-engine.md` — engine internals, crossfade, EQ; `backend-services.md` — services, persistence, queue system; `ui-views.md` — slot list views, expansion, browsing panel, handler plumbing; `ui-queue.md`, `ui-lyrics.md`, `ui-artists.md`, `ui-radio-artwork.md`, `ui-window.md` (modals, Theater Mode, artwork bleed, tray) — one view area each; `widgets.md` — widget catalog, layout constants, menu/modal chrome, SVG icons; `visualizer.md` — FFT pipeline, shaders, effects; `settings-view.md` — settings module structure, SettingValue types; `gotchas/*.md` — the subtle pitfalls, one file per area). Subagents get the same injection on their own reads, but the built-in Explore and Plan agents skip CLAUDE.md and `code-standards.md`: restate what they need in the prompt, have them Read the rule files, or use the project's `nokkvi-explorer` agent (`.claude/agents/`) for read-only code location.
 
 Building or extending a feature (new view, setting, hotkey, menu entry, playback behavior)? Read `.claude/skills/new-feature-checklist/SKILL.md` before writing code and re-check it before committing (also auto-invocable as the `new-feature-checklist` skill; its `new-view.md` covers adding a slot-list view).
+
+Finding where code lives? The `codebase-map` skill routes a task to its directory and prints which rule files cover a path (`rules_for.py`), so a new session need not re-explore the tree. Non-Claude agents start from `AGENTS.md`.
 
 Procedures live as skills in `.claude/skills/`: `/commit`, `/unreleased`, `/sync-rules`, and `/package` (user-invoked only; it also holds the canonical changelog style rubric in § 1).
 

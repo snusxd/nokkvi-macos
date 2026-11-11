@@ -11,7 +11,8 @@ use crate::{
     types::{
         player_settings::{
             ArtworkColumnMode, ArtworkCover, ArtworkResolution, ArtworkStretchFit, BitPerfectMode,
-            CollapsedAppearance, CrossfadeCurve, EnterBehavior, FadeOnSkip, IconSet,
+            CollapsedAppearance, CoverBeatStrength, CrossfadeCurve, EnterBehavior,
+            FONT_SIZE_PX_DEFAULT, FadeOnSkip, FontWeight, IconSet, LYRICS_FONT_SIZE_PX_DEFAULT,
             LibraryPageSize, LyricsAlignment, LyricsBackdropBlur, LyricsMode, LyricsWordHighlight,
             NavDisplayMode, NavLayout, NormalizationLevel, RatingReminderTrigger, RoundedMode,
             ScrollbarVisibility, SeekbarStyle, SlotRowHeight, StripClickAction, TheaterControls,
@@ -76,6 +77,8 @@ pub struct TomlSettings {
     pub theater_controls: TheaterControls,
     #[serde(default)]
     pub theater_window_fullscreen: bool,
+    #[serde(default)]
+    pub cover_beat_strength: CoverBeatStrength,
     #[serde(
         default = "default_artwork_column_width_pct",
         serialize_with = "round_f32"
@@ -97,6 +100,7 @@ pub struct TomlSettings {
 
     // -- Behavior --
     pub stable_viewport: bool,
+    pub smooth_trackpad_scroll: bool,
     pub auto_follow_playing: bool,
     /// Seconds the Seek Backward / Seek Forward keys jump (1–60, default 5).
     /// Missing keys fill from the container `#[serde(default)]` ->
@@ -129,6 +133,15 @@ pub struct TomlSettings {
     /// Which icon family the UI renders (default `Phosphor`). Missing keys fill
     /// from the container `#[serde(default)]` -> `TomlSettings::default()`.
     pub icon_set: IconSet,
+    /// UI font size in px (default 14, the designed size).
+    pub font_size_px: u32,
+    /// Base weight of the UI font (default `Regular`).
+    pub font_weight: FontWeight,
+    /// Whether the Now Playing sidebar is shown (default false).
+    pub now_playing_sidebar: bool,
+    /// The nav tabs' order (tab keys); empty = the built-in order.
+    #[serde(default)]
+    pub nav_tab_order: Vec<String>,
     pub horizontal_volume: bool,
     /// Whether the view-header toolbar auto-hides to a thin line until hovered
     /// or a sort/search shortcut is used (default true). Missing keys fill from
@@ -176,6 +189,8 @@ pub struct TomlSettings {
     pub lyrics_word_highlight: LyricsWordHighlight,
     /// Where lyric lines sit across the lyrics panel (left / center / right).
     pub lyrics_alignment: LyricsAlignment,
+    /// Lyrics text size in px (default 16).
+    pub lyrics_font_size_px: u32,
     #[serde(deserialize_with = "deserialize_bit_perfect_with_bool_compat")]
     pub bit_perfect: BitPerfectMode,
     pub crossfade_duration_secs: u32,
@@ -366,10 +381,12 @@ impl Default for TomlSettings {
             artwork_cover: ArtworkCover::default(),
             theater_controls: TheaterControls::default(),
             theater_window_fullscreen: false,
+            cover_beat_strength: CoverBeatStrength::default(),
             artwork_column_width_pct: default_artwork_column_width_pct(),
             artwork_auto_max_pct: default_artwork_auto_max_pct(),
             artwork_vertical_height_pct: default_artwork_vertical_height_pct(),
             stable_viewport: true,
+            smooth_trackpad_scroll: true,
             auto_follow_playing: true,
             seek_step_secs: default_seek_step_secs(),
             light_mode: false,
@@ -384,6 +401,10 @@ impl Default for TomlSettings {
             dynamic_visualizer: false,
             scrollbar_visibility: ScrollbarVisibility::default(),
             icon_set: IconSet::default(),
+            font_size_px: FONT_SIZE_PX_DEFAULT,
+            font_weight: FontWeight::default(),
+            now_playing_sidebar: false,
+            nav_tab_order: Vec::new(),
             horizontal_volume: false,
             autohide_toolbar: true,
             autohide_toolbar_height: 4,
@@ -409,6 +430,7 @@ impl Default for TomlSettings {
             lyrics_backdrop_blur: LyricsBackdropBlur::default(),
             lyrics_word_highlight: LyricsWordHighlight::default(),
             lyrics_alignment: LyricsAlignment::Center,
+            lyrics_font_size_px: LYRICS_FONT_SIZE_PX_DEFAULT,
             bit_perfect: BitPerfectMode::default(),
             crossfade_duration_secs: 7,
             crossfade_curve: CrossfadeCurve::default(),
@@ -571,8 +593,8 @@ mod tests {
         let toml_str = toml::to_string_pretty(&settings).expect("serialize");
         // Verify enums serialize to readable TOML values
         assert!(
-            toml_str.contains("visualization_mode = \"bars\""),
-            "Expected bars, got:\n{toml_str}"
+            toml_str.contains("visualization_mode = \"off\""),
+            "Expected off, got:\n{toml_str}"
         );
         assert!(
             toml_str.contains("enter_behavior = \"play_all\""),

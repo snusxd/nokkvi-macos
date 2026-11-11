@@ -33,6 +33,8 @@ pub(super) struct UiModeFlags {
     pub(super) opacity_gradient: AtomicBool,
     /// Whether clickable text links in slot list items are enabled
     pub(super) slot_text_links: AtomicBool,
+    /// Whether pixel-delta (trackpad) scrolling glides slot lists by sub-row amounts
+    pub(super) smooth_trackpad_scroll: AtomicBool,
     /// How the slot-list scrollbar is shown (`ScrollbarVisibility` discriminant:
     /// OnHover / Always / Hidden)
     pub(super) scrollbar_visibility: AtomicU8,
@@ -120,6 +122,7 @@ pub(super) static UI_MODE: UiModeFlags = UiModeFlags {
     slot_row_height: AtomicU8::new(SlotRowHeight::Default as u8),
     opacity_gradient: AtomicBool::new(true),
     slot_text_links: AtomicBool::new(false),
+    smooth_trackpad_scroll: AtomicBool::new(true),
     scrollbar_visibility: AtomicU8::new(ScrollbarVisibility::Always as u8),
     icon_set: AtomicU8::new(IconSet::Phosphor as u8),
     horizontal_volume: AtomicBool::new(false),
@@ -386,6 +389,25 @@ pub(crate) fn is_opacity_gradient() -> bool {
 pub(crate) fn set_opacity_gradient(enabled: bool) {
     UI_MODE.opacity_gradient.store(enabled, Ordering::Relaxed);
     debug!(" Opacity gradient changed: opacity_gradient={}", enabled);
+}
+
+// ============================================================================
+// Smooth Trackpad Scroll Control
+// ============================================================================
+
+/// Returns true if slot lists glide on pixel-delta (trackpad) scrolling
+#[inline]
+pub(crate) fn is_smooth_trackpad_scroll() -> bool {
+    UI_MODE.smooth_trackpad_scroll.load(Ordering::Relaxed)
+}
+
+/// Set smooth trackpad scrolling (call when the persisted setting loads or changes)
+#[inline]
+pub(crate) fn set_smooth_trackpad_scroll(enabled: bool) {
+    UI_MODE
+        .smooth_trackpad_scroll
+        .store(enabled, Ordering::Relaxed);
+    debug!(" Smooth trackpad scroll changed: enabled={}", enabled);
 }
 
 // ============================================================================

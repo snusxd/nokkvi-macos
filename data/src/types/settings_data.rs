@@ -27,6 +27,7 @@ pub struct GeneralSettingsData {
     pub username: Cow<'static, str>,
     pub start_view: Cow<'static, str>,
     pub stable_viewport: bool,
+    pub smooth_trackpad_scroll: bool,
     pub auto_follow_playing: bool,
     pub enter_behavior: Cow<'static, str>,
     pub enter_shuffle: bool,
@@ -55,6 +56,7 @@ impl Default for GeneralSettingsData {
             username: Cow::Borrowed("test-default"),
             start_view: Cow::Borrowed("test-default"),
             stable_viewport: false,
+            smooth_trackpad_scroll: false,
             auto_follow_playing: false,
             enter_behavior: Cow::Borrowed("test-default"),
             enter_shuffle: false,
@@ -99,6 +101,12 @@ pub struct InterfaceSettingsData {
     pub scrollbar_visibility: Cow<'static, str>,
     /// Icon set label (Lucide / Phosphor).
     pub icon_set: Cow<'static, str>,
+    /// UI font size in px.
+    pub font_size_px: i64,
+    /// Font weight label (Light / Regular / Medium / Bold).
+    pub font_weight: Cow<'static, str>,
+    /// Whether the Now Playing sidebar is shown.
+    pub now_playing_sidebar: bool,
     pub font_family: Cow<'static, str>,
     pub strip_show_title: bool,
     pub strip_show_artist: bool,
@@ -122,6 +130,8 @@ pub struct InterfaceSettingsData {
     pub theater_controls: Cow<'static, str>,
     /// Theater Fills the Screen toggle.
     pub theater_window_fullscreen: bool,
+    /// Cover Beat Strength label (Subtle / Punchy).
+    pub cover_beat_strength: Cow<'static, str>,
     /// Auto-mode max artwork fraction of the window's short axis (0.30..=0.70).
     pub artwork_auto_max_pct: f64,
     /// Always-Vertical artwork height as a fraction of window height (0.10..=0.80).
@@ -152,6 +162,9 @@ impl InterfaceSettingsData {
             slot_text_links: live.slot_text_links,
             scrollbar_visibility: live.scrollbar_visibility.as_label().into(),
             icon_set: live.icon_set.as_label().into(),
+            font_size_px: i64::from(live.font_size_px),
+            font_weight: live.font_weight.as_label().into(),
+            now_playing_sidebar: live.now_playing_sidebar,
             font_family: live.font_family.clone().into(),
             strip_show_title: live.strip_show_title,
             strip_show_artist: live.strip_show_artist,
@@ -170,6 +183,7 @@ impl InterfaceSettingsData {
             artwork_cover: live.artwork_cover.as_label().into(),
             theater_controls: live.theater_controls.as_label().into(),
             theater_window_fullscreen: live.theater_window_fullscreen,
+            cover_beat_strength: live.cover_beat_strength.as_label().into(),
             artwork_auto_max_pct: f64::from(live.artwork_auto_max_pct),
             artwork_vertical_height_pct: f64::from(live.artwork_vertical_height_pct),
         }
@@ -196,6 +210,9 @@ impl Default for InterfaceSettingsData {
             slot_text_links: false,
             scrollbar_visibility: Cow::Borrowed("test-default"),
             icon_set: Cow::Borrowed("test-default"),
+            font_size_px: 14,
+            font_weight: Cow::Borrowed("test-default"),
+            now_playing_sidebar: false,
             font_family: Cow::Borrowed("test-default"),
             strip_show_title: false,
             strip_show_artist: false,
@@ -214,6 +231,7 @@ impl Default for InterfaceSettingsData {
             artwork_cover: Cow::Borrowed("test-default"),
             theater_controls: Cow::Borrowed("test-default"),
             theater_window_fullscreen: false,
+            cover_beat_strength: Cow::Borrowed("test-default"),
             artwork_auto_max_pct: 0.0,
             artwork_vertical_height_pct: 0.0,
         }
@@ -233,6 +251,8 @@ pub struct PlaybackSettingsData {
     pub lyrics_word_highlight: Cow<'static, str>,
     /// Lyrics alignment label ("Left" / "Center" / "Right").
     pub lyrics_alignment: Cow<'static, str>,
+    /// Lyrics text size in px.
+    pub lyrics_font_size_px: i64,
     /// Bit-perfect mode label ("Off" / "Strict" / "Relaxed").
     pub bit_perfect: Cow<'static, str>,
     pub crossfade_duration_secs: i64,
@@ -320,6 +340,7 @@ impl Default for PlaybackSettingsData {
             lyrics_backdrop_blur: Cow::Borrowed("test-default"),
             lyrics_word_highlight: Cow::Borrowed("test-default"),
             lyrics_alignment: Cow::Borrowed("test-default"),
+            lyrics_font_size_px: 16,
             bit_perfect: Cow::Borrowed("test-default"),
             crossfade_duration_secs: 0,
             crossfade_curve: Cow::Borrowed("test-default"),

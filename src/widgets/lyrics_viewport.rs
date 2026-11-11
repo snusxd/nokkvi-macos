@@ -249,6 +249,9 @@ pub(crate) struct LyricsPanelData<'a> {
     pub word_highlight: LyricsWordHighlight,
     /// Where each line sits across the panel (the Lyrics: Alignment setting).
     pub align: LyricsAlignment,
+    /// The Lyrics: Font Size setting as a multiplier of the designed size
+    /// (`px / 16`), applied on top of the panel-fit scale.
+    pub font_scale: f32,
 }
 
 /// The lyric text scale for a panel of `width` × `height`: 1.0 up to a
@@ -888,7 +891,7 @@ impl<M: 'static> Widget<M, Theme, iced::Renderer> for LyricViewport<'_, M> {
         let state = tree.state.downcast_mut::<State>();
 
         // (Re-)shape the paragraphs when the doc or the panel width changes.
-        let text_scale = panel_fit_scale(bounds.width, bounds.height);
+        let text_scale = panel_fit_scale(bounds.width, bounds.height) * self.data.font_scale;
         let text_width = (bounds.width - 2.0 * H_PAD * text_scale).max(1.0);
         let scale = renderer.hint_factor();
         let scale_key = (text_scale * 100.0).round() as u32;
@@ -993,7 +996,7 @@ impl<M: 'static> Widget<M, Theme, iced::Renderer> for LyricViewport<'_, M> {
     ) {
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
-        let text_scale = panel_fit_scale(bounds.width, bounds.height);
+        let text_scale = panel_fit_scale(bounds.width, bounds.height) * self.data.font_scale;
         let h_pad = H_PAD * text_scale;
         let line_height = LINE_HEIGHT * text_scale;
 

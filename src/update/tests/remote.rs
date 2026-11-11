@@ -224,7 +224,7 @@ mod nav_focus {
     use crate::{
         View,
         update::hotkeys::navigation::{NavFocusKey, nav_focus_key},
-        widgets::nav_bar::{NavFocus, NavView},
+        widgets::nav_bar::{NavFocus, NavTabOrder, NavView},
     };
 
     /// Runs `check` with the nav layout set to `layout` (`NavLayoutGuard`).
@@ -456,15 +456,37 @@ mod nav_focus {
 
     #[test]
     fn the_highlight_stops_at_either_end() {
+        let order = NavTabOrder::default();
         assert_eq!(
-            NavFocus::Tab(NavView::Queue).step(false),
+            NavFocus::Tab(NavView::Queue).step(false, &order),
             NavFocus::Tab(NavView::Queue)
         );
-        assert_eq!(NavFocus::Harbour.step(true), NavFocus::Harbour);
-        assert_eq!(NavFocus::Tab(NavView::Radios).step(true), NavFocus::Harbour);
+        assert_eq!(NavFocus::Harbour.step(true, &order), NavFocus::Harbour);
         assert_eq!(
-            NavFocus::Harbour.step(false),
+            NavFocus::Tab(NavView::Radios).step(true, &order),
+            NavFocus::Harbour
+        );
+        assert_eq!(
+            NavFocus::Harbour.step(false, &order),
             NavFocus::Tab(NavView::Radios)
+        );
+    }
+
+    #[test]
+    fn the_highlight_walks_the_tabs_in_their_dragged_order() {
+        // Radio dragged to the front: Radio, Queue, Albums, …, Playlists.
+        let order = NavTabOrder::default().moved(6, 0);
+        assert_eq!(
+            NavFocus::Tab(NavView::Radios).step(true, &order),
+            NavFocus::Tab(NavView::Queue)
+        );
+        assert_eq!(
+            NavFocus::Tab(NavView::Radios).step(false, &order),
+            NavFocus::Tab(NavView::Radios)
+        );
+        assert_eq!(
+            NavFocus::Harbour.step(false, &order),
+            NavFocus::Tab(NavView::Playlists)
         );
     }
 

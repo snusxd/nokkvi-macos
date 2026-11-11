@@ -207,14 +207,29 @@ impl Nokkvi {
         // The seek handler only needs to move the viewport offset, so we
         // short-circuit here: move the offset, record the scroll for the
         // scrollbar fade animation, and return immediately.
-        if let QueueMessage::SlotList(SlotListPageMessage::ScrollSeek(offset)) = &msg {
+        if let QueueMessage::SlotList(
+            SlotListPageMessage::ScrollSeek(_)
+            | SlotListPageMessage::ScrollUp
+            | SlotListPageMessage::ScrollDown,
+        ) = &msg
+        {
             let total = if self.queue_page.common.search_query.is_empty() {
                 self.library.queue_songs.len()
             } else {
                 self.filter_queue_songs().len()
             };
-            self.queue_page.common.handle_set_offset(*offset, total);
-            self.queue_page.common.slot_list.record_scroll();
+            match &msg {
+                QueueMessage::SlotList(SlotListPageMessage::ScrollSeek(offset)) => {
+                    self.queue_page.common.handle_scroll_seek(*offset, total);
+                }
+                QueueMessage::SlotList(SlotListPageMessage::ScrollUp) => {
+                    self.queue_page.common.handle_scroll_up(total);
+                }
+                QueueMessage::SlotList(SlotListPageMessage::ScrollDown) => {
+                    self.queue_page.common.handle_scroll_down(total);
+                }
+                _ => unreachable!(),
+            }
             // Spawn two lightweight timers (no O(n) work, just gen_id guards):
             // 1. Fade timer (1.5s) — hides the scrollbar after drag ends
             // 2. Seek-settled timer (150ms) — loads artwork for final viewport
@@ -292,6 +307,8 @@ impl Nokkvi {
             QueueMessage::SlotList(
                 SlotListPageMessage::NavigateUp
                 | SlotListPageMessage::NavigateDown
+                | SlotListPageMessage::ScrollUp
+                | SlotListPageMessage::ScrollDown
                 | SlotListPageMessage::SetOffset(..)
                 | SlotListPageMessage::ScrollSeek(_)
                 | SlotListPageMessage::ActivateCenter(_)

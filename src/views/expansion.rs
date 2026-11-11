@@ -363,6 +363,29 @@ impl<C: Clone> ExpansionState<C> {
         common.get_center_item_index(len)
     }
 
+    /// Handle mouse-wheel / touchpad scroll up for expansion-aware views.
+    pub fn handle_scroll_up<P>(&self, parents: &[P], common: &mut SlotListPageState) {
+        let len = self.flattened_len(parents);
+        common.handle_scroll_up(len);
+    }
+
+    /// Handle mouse-wheel / touchpad scroll down for expansion-aware views.
+    pub fn handle_scroll_down<P>(&self, parents: &[P], common: &mut SlotListPageState) {
+        let len = self.flattened_len(parents);
+        common.handle_scroll_down(len);
+    }
+
+    /// Handle scrollbar drag/seek for expansion-aware views.
+    pub fn handle_scroll_seek<P>(
+        &self,
+        offset: usize,
+        parents: &[P],
+        common: &mut SlotListPageState,
+    ) {
+        let len = self.flattened_len(parents);
+        common.handle_scroll_seek(offset, len);
+    }
+
     /// Handle set-offset for expansion-aware views.
     /// Returns the center item index after setting offset (for artwork loading).
     pub fn handle_set_offset<P>(

@@ -192,6 +192,11 @@ impl ArtistsApiService {
             params.push(("name", query));
         }
 
+        // Filter to starred artists only when Favorited sort is selected
+        if sort_param == "starred_at" {
+            params.push(("starred", "true"));
+        }
+
         for s in library_id_strings {
             params.push(("library_id", s.as_str()));
         }
@@ -343,5 +348,20 @@ mod tests {
             &[],
         );
         assert_eq!(params, base_only);
+    }
+
+    #[test]
+    fn starred_at_sort_filters_to_starred_artists() {
+        let r = range("0", "36");
+        let params = ArtistsApiService::build_artist_params(
+            "starred_at",
+            "DESC",
+            &r,
+            false,
+            None,
+            None,
+            &[],
+        );
+        assert!(params.contains(&("starred", "true")));
     }
 }

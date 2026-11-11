@@ -323,9 +323,10 @@ fn every_interface_field_is_applied_on_settings_load() {
         },
         types::{
             player_settings::{
-                ArtworkColumnMode, ArtworkCover, ArtworkStretchFit, CollapsedAppearance, IconSet,
-                NavDisplayMode, NavLayout, ScrollbarVisibility, SeekbarStyle, SlotRowHeight,
-                StripClickAction, StripSeparator, TheaterControls, TrackInfoDisplay,
+                ArtworkColumnMode, ArtworkCover, ArtworkStretchFit, CollapsedAppearance,
+                CoverBeatStrength, IconSet, NavDisplayMode, NavLayout, ScrollbarVisibility,
+                SeekbarStyle, SlotRowHeight, StripClickAction, StripSeparator, TheaterControls,
+                TrackInfoDisplay,
             },
             settings_data::InterfaceSettingsData,
         },
@@ -362,6 +363,9 @@ fn every_interface_field_is_applied_on_settings_load() {
         slot_text_links: !shipped.slot_text_links,
         scrollbar_visibility: ScrollbarVisibility::Hidden,
         icon_set: IconSet::Lucide,
+        font_size_px: 18,
+        now_playing_sidebar: true,
+        font_weight: nokkvi_data::types::player_settings::FontWeight::Bold,
         strip_show_title: !shipped.strip_show_title,
         strip_show_artist: !shipped.strip_show_artist,
         strip_show_album: !shipped.strip_show_album,
@@ -379,6 +383,7 @@ fn every_interface_field_is_applied_on_settings_load() {
         artwork_cover: ArtworkCover::HideEverywhere,
         theater_controls: TheaterControls::AlwaysHidden,
         theater_window_fullscreen: !shipped.theater_window_fullscreen,
+        cover_beat_strength: CoverBeatStrength::Punchy,
         artwork_auto_max_pct: 0.5,
         artwork_vertical_height_pct: 0.25,
         ..shipped.clone()

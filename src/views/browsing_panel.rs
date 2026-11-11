@@ -106,7 +106,7 @@ impl BrowsingPanel {
 
                 let label = text(label_str)
                     .font(theme::weighted_ui_font(iced::font::Weight::Medium))
-                    .size(12)
+                    .size(crate::theme::fs(12))
                     .color(if view == self.active_view {
                         theme::fg0()
                     } else {

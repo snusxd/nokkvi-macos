@@ -144,6 +144,35 @@ pub fn with_client_unique_id(request: reqwest::RequestBuilder) -> reqwest::Reque
     request.header(CLIENT_UNIQUE_ID_HEADER, client_unique_id())
 }
 
+/// `params` plus `missing=false` when `endpoint` lists songs, albums,
+/// artists, tags or a playlist's tracks and the caller didn't set `missing`.
+///
+/// Navidrome keeps a file deleted from disk as a row flagged `missing` (its
+/// default `Scanner.PurgeMissing` is `never`), and the native REST API returns
+/// those rows unless the request filters them out. Its web UI adds the same
+/// filter to these resources for a non-admin (`wrapperDataProvider.js`); the
+/// Subsonic API drops them on its own (`addDefaultFilters`). Without it a
+/// deleted track showed up in the views and failed when played, with the
+/// server's "no such file or directory". A single-row read (`/api/song/{id}`)
+/// is left alone.
+fn with_missing_hidden<'a>(
+    endpoint: &str,
+    params: &[(&'a str, &'a str)],
+) -> Vec<(&'a str, &'a str)> {
+    let lists_rows = matches!(
+        endpoint,
+        "/api/song" | "/api/album" | "/api/artist" | "/api/tag"
+    ) || endpoint
+        .strip_prefix("/api/playlist/")
+        .and_then(|rest| rest.strip_suffix("/tracks"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'));
+    let mut params = params.to_vec();
+    if lists_rows && !params.iter().any(|(key, _)| *key == "missing") {
+        params.push(("missing", "false"));
+    }
+    params
+}
+
 /// The per-process client unique id sent by [`with_client_unique_id`].
 /// Minted once from the existing `rand` dependency (no `uuid` crate exists
 /// in the workspace and none is added).
@@ -497,12 +526,16 @@ impl ApiClient {
 
     /// Make a GET request and return both body and headers
     /// Returns (body, total_count_from_header)
+    ///
+    /// A list read of songs, albums, artists, tags or playlist tracks asks
+    /// for present rows only ([`with_missing_hidden`]).
     pub async fn get_with_headers(
         &self,
         endpoint: &str,
         params: &[(&str, &str)],
     ) -> Result<(String, Option<u32>)> {
-        let request = self.build_request(Method::GET, endpoint, params)?;
+        let params = with_missing_hidden(endpoint, params);
+        let request = self.build_request(Method::GET, endpoint, &params)?;
         self.execute(
             request,
             &format!("API GET {endpoint}"),
@@ -1177,6 +1210,40 @@ mod tests {
             "missing ctx in: {msg}"
         );
         assert!(msg.contains("500"), "missing status in: {msg}");
+    }
+
+    /// List reads ask for present rows only; a single-row read, another
+    /// resource and a caller's own `missing` are left alone.
+    #[test]
+    fn list_reads_hide_files_navidrome_marked_missing() {
+        let page = [("_start", "0"), ("_end", "50")];
+        for endpoint in [
+            "/api/song",
+            "/api/album",
+            "/api/artist",
+            "/api/tag",
+            "/api/playlist/pl1/tracks",
+        ] {
+            assert_eq!(
+                with_missing_hidden(endpoint, &page),
+                [("_start", "0"), ("_end", "50"), ("missing", "false")],
+                "{endpoint}"
+            );
+        }
+        for endpoint in [
+            "/api/song/s1",
+            "/api/artist/ar1",
+            "/api/playlist",
+            "/api/playlist/pl1",
+            "/api/genre",
+            "/api/player/p1",
+        ] {
+            assert_eq!(with_missing_hidden(endpoint, &page), page, "{endpoint}");
+        }
+        assert_eq!(
+            with_missing_hidden("/api/song", &[("missing", "true")]),
+            [("missing", "true")]
+        );
     }
 
     #[test]

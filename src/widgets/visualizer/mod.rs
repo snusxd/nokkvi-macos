@@ -4,6 +4,7 @@
 
 mod flash;
 mod horizon;
+mod kick;
 pub(crate) mod milkdrop;
 mod onset;
 mod particles;
@@ -38,7 +39,8 @@ impl VisualizationMode {
     ) -> Option<Self> {
         use nokkvi_data::types::player_settings::VisualizationMode as Mode;
         match mode {
-            Mode::Off => None,
+            // Cover Beat draws no shader: the cover itself moves.
+            Mode::Off | Mode::CoverBeat => None,
             Mode::Bars => Some(Self::Bars),
             Mode::Lines => Some(Self::Lines),
             Mode::Scope => Some(Self::Scope),
@@ -118,7 +120,8 @@ pub(crate) fn resolve_placement(
     };
 
     match mode {
-        Mode::Off => VisualizerSlots::default(),
+        // Cover Beat moves the cover itself and draws no shader anywhere.
+        Mode::Off | Mode::CoverBeat => VisualizerSlots::default(),
         Mode::Scope => VisualizerSlots {
             bottom_band: None,
             over_art: Some(VisualizationMode::Scope),
@@ -139,7 +142,8 @@ mod placement_tests {
     use super::{VisualizationMode as WidgetMode, resolve_placement};
     use crate::visualizer_config::VisualizerPlacement::{BottomBand, OverCover};
 
-    /// Exactly one slot is ever `Some` (both `None` only for `Off`). This pins
+    /// Exactly one slot is ever `Some` (both `None` only for `Off` and the
+    /// shader-less Cover Beat). This pins
     /// the invariant that the active visualizer renders in one place, never two
     /// and never none-when-on.
     #[test]
@@ -151,12 +155,13 @@ mod placement_tests {
             Mode::Lines,
             Mode::Scope,
             Mode::Milkdrop,
+            Mode::CoverBeat,
         ] {
             for bars in placements {
                 for lines in placements {
                     let slots = resolve_placement(mode, bars, lines);
                     let filled = slots.bottom_band.is_some() as u8 + slots.over_art.is_some() as u8;
-                    let expected = if mode == Mode::Off { 0 } else { 1 };
+                    let expected = u8::from(!matches!(mode, Mode::Off | Mode::CoverBeat));
                     assert_eq!(
                         filled, expected,
                         "mode={mode:?} bars={bars:?} lines={lines:?} filled {filled} slots, expected {expected}",
@@ -732,6 +737,13 @@ impl Visualizer {
     /// audio batches), `true` for Bars/Lines.
     pub fn set_feed_active(&self, active: bool) {
         self.state.set_feed_active(active);
+    }
+
+    /// The latest kick from the worker's kick detector, as `(sequence,
+    /// strength)`: the sequence bumps once per kick, the strength is
+    /// `0.55..=1.0`. Theater Mode's Cover Beat polls it each frame.
+    pub(crate) fn cover_kick(&self) -> (u32, f32) {
+        self.state.cover_kick()
     }
 
     /// Point the FFT worker at `mode` (MilkDrop feeds its analyzer instead of

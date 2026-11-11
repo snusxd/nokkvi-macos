@@ -378,6 +378,7 @@ impl PlaylistsPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: data.chrome.header_reserve(),
             bleed: data.bleed,
         };
 
@@ -418,8 +419,8 @@ impl PlaylistsPage {
             &self.common.slot_list,
             &flattened,
             &config,
-            PlaylistsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateUp),
-            PlaylistsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateDown),
+            PlaylistsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollUp),
+            PlaylistsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(flattened.len(), PlaylistsMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 PlaylistsMessage::SlotList,
@@ -502,7 +503,7 @@ impl PlaylistsPage {
 
                 let mut col = column![
                     text(playlist.name.clone())
-                        .size(24)
+                        .size(crate::theme::fs(24))
                         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                         .color(theme::fg0()),
                 ]
@@ -519,7 +520,7 @@ impl PlaylistsPage {
                     };
                     col = col.push(
                         text(preview)
-                            .size(14)
+                            .size(crate::theme::fs(14))
                             .color(theme::fg2())
                             .font(theme::ui_font())
                             .center()
@@ -809,7 +810,7 @@ impl PlaylistsPage {
                 badge_icon,
                 iced::widget::container(
                     iced::widget::text("Smart playlist — updates itself from rules")
-                        .size(11.0)
+                        .size(crate::theme::fs(11.0))
                         .font(crate::theme::ui_font()),
                 )
                 .padding(4),
@@ -844,7 +845,7 @@ impl PlaylistsPage {
                 lock_icon,
                 iced::widget::container(
                     iced::widget::text("Private playlist")
-                        .size(11.0)
+                        .size(crate::theme::fs(11.0))
                         .font(crate::theme::ui_font()),
                 )
                 .padding(4),

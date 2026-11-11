@@ -185,6 +185,9 @@ fn map_nav_bar_message(msg: widgets::NavBarMessage) -> Message {
         widgets::NavBarMessage::SwitchView(nav_view) => {
             Message::Navigation(NavigationMessage::SwitchView(nav_view.into()))
         }
+        widgets::NavBarMessage::ReorderTabs { from, to } => {
+            Message::Navigation(NavigationMessage::ReorderTabs { from, to })
+        }
         widgets::NavBarMessage::SwitchToEditor => {
             Message::Navigation(NavigationMessage::SwitchView(View::PlaylistEditor))
         }
@@ -294,6 +297,11 @@ pub(crate) struct PlayingCover<'a> {
     pub large: Option<&'a iced::widget::image::Handle>,
     pub mini: Option<&'a iced::widget::image::Handle>,
 }
+
+/// How far (as a share of the column's height) the lyrics travel when the
+/// theater reveal brings them in: the whole column, so the sheet starts below
+/// the window instead of popping up mid-screen.
+const LYRICS_REVEAL_TRAVEL: f32 = 1.0;
 
 impl Nokkvi {
     // =========================================================================
@@ -480,7 +488,30 @@ impl Nokkvi {
         } else {
             0.0
         };
-        (self.window.width - nav_chrome).max(0.0)
+        (self.window.width - nav_chrome - self.now_playing_sidebar_inset()).max(0.0)
+    }
+
+    /// Whether the Now Playing sidebar is drawn this frame: the setting is on
+    /// and the Home layout shows. Theater Mode replaces the layout, except
+    /// while the panel grows out of the sidebar's cover (`RevealKind::Enter`),
+    /// when the Home layout, the sidebar included, stays up beneath it.
+    pub(crate) fn now_playing_sidebar_shown(&self) -> bool {
+        self.settings.now_playing_sidebar
+            && self.screen == Screen::Home
+            && (!self.theater.active
+                || self
+                    .theater
+                    .reveal
+                    .is_some_and(|r| r.kind == crate::state::RevealKind::Enter))
+    }
+
+    /// Horizontal footprint of the Now Playing sidebar on screen, or 0.
+    pub(crate) fn now_playing_sidebar_inset(&self) -> f32 {
+        if self.now_playing_sidebar_shown() {
+            crate::widgets::now_playing_sidebar::sidebar_total_width()
+        } else {
+            0.0
+        }
     }
 
     /// Horizontal footprint of the sidebar on screen right now:
@@ -490,11 +521,15 @@ impl Nokkvi {
     /// the bottom-band visualizer, the toast strip) starts at this x instead
     /// of painting over its tabs.
     pub(crate) fn side_nav_inset(&self) -> f32 {
-        if self.screen == Screen::Home && !self.theater.active && crate::theme::is_side_nav() {
-            crate::widgets::side_nav_bar::side_nav_total_width()
-        } else {
-            0.0
-        }
+        let nav =
+            if self.screen == Screen::Home && !self.theater.active && crate::theme::is_side_nav() {
+                crate::widgets::side_nav_bar::side_nav_total_width()
+            } else {
+                0.0
+            };
+        // The Now Playing sidebar sits beside it (above the player bar, which
+        // runs under it unless lowered; `bottom_chrome_span` takes that off).
+        nav + self.now_playing_sidebar_inset()
     }
 
     /// The x-range of the docked player bar (see [`BottomChromeSpan`]),
@@ -504,11 +539,17 @@ impl Nokkvi {
     /// the slot list instead of across the artwork. Theater Mode and the
     /// login screen draw no lowered bar.
     pub(crate) fn bottom_chrome_span(&self) -> BottomChromeSpan {
-        let left = self.side_nav_inset();
         let lowered = if self.screen == Screen::Home && !self.theater.active {
             self.lowered_player_bar_width()
         } else {
             None
+        };
+        // Unlowered, the player bar runs under the Now Playing sidebar
+        // (`home_view`), so only the side nav is left of it.
+        let left = if lowered.is_some() {
+            self.side_nav_inset()
+        } else {
+            self.side_nav_inset() - self.now_playing_sidebar_inset()
         };
         BottomChromeSpan {
             left,
@@ -558,6 +599,7 @@ impl Nokkvi {
             window_height: self.window.height,
             show_artwork_column: true,
             slot_list_chrome: 0.0,
+            header_reserve: None,
             bleed: ArtworkBleed::NONE,
         })?;
         match layout.orientation {
@@ -582,6 +624,19 @@ impl Nokkvi {
         }
     }
 
+    /// `upper` with `bar` under it across its width, or `upper` alone.
+    fn stack_bar_below<'a>(
+        upper: Element<'a, Message>,
+        bar: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        match bar {
+            Some(bar) => iced::widget::column![upper, bar]
+                .height(Length::Fill)
+                .boxed(),
+            None => upper,
+        }
+    }
+
     /// Dock the top chrome (the top nav bar and the metadata strip row,
     /// whichever the layout shows) above `content` and the player bar below
     /// it. Normally each spans the content column and `content` is padded
@@ -593,14 +648,18 @@ impl Nokkvi {
     fn dock_chrome<'a>(
         content: Element<'a, Message>,
         top_chrome: Option<Element<'a, Message>>,
-        player_bar: Element<'a, Message>,
+        player_bar: Option<Element<'a, Message>>,
         lowered_width: Option<f32>,
     ) -> Element<'a, Message> {
         let (top_pad, bottom_pad) = match lowered_width {
             Some(_) => (0.0, 0.0),
             None => (
                 widgets::slot_list::top_chrome_height(),
-                widgets::player_bar::player_bar_height(),
+                if player_bar.is_some() {
+                    widgets::player_bar::player_bar_height()
+                } else {
+                    0.0
+                },
             ),
         };
         let base = container(content)
@@ -623,7 +682,7 @@ impl Nokkvi {
                     .height(Length::Fill)
                     .boxed(),
             )
-            .push(container(player_bar).width(chrome_width).boxed())
+            .extend(player_bar.map(|bar| container(bar).width(chrome_width).boxed()))
             .width(Length::Fill)
             .height(Length::Fill);
         iced::widget::stack![base, chrome_layer].boxed()
@@ -704,6 +763,8 @@ impl Nokkvi {
             // The lowered bar lays out against its own width: its modes cull
             // into the kebab from the window-width layout, and the width gates
             // (SFX slider, MiniPlayer sections) read the bar's width too.
+            // Unlowered, it runs under the Now Playing sidebar, so the
+            // sidebar takes none of its width.
             window_width: lowered_bar_width.unwrap_or(self.window.width),
             // MiniPlayer remaps per the width-driven regime: the wide
             // three-section layout passes the mode-cull count through (modes
@@ -858,7 +919,14 @@ impl Nokkvi {
         // `main_content` are all left out (nothing is torn down by omitting
         // them: the split view, the editor and the search come back as they
         // were).
-        if self.theater.active {
+        // While the panel grows out of the cover (`RevealKind::Enter`) the home
+        // layout stays up beneath it: the layout below draws it, and the
+        // panel rides on top as the last layers.
+        let theater_entering = self
+            .theater
+            .reveal
+            .is_some_and(|r| r.kind == crate::state::RevealKind::Enter);
+        if self.theater.active && !theater_entering {
             return self.theater_view(
                 widgets::player_bar(&player_bar_data, player_strip)
                     .map(Message::PlayerBar)
@@ -873,7 +941,8 @@ impl Nokkvi {
         // breakpoints), so the artwork column beside them runs the window's
         // full height.
         let top_chrome: Option<Element<'_, Message>> = if crate::theme::is_top_nav() {
-            let nav_width = lowered_bar_width.unwrap_or(self.window.width);
+            let nav_width = lowered_bar_width
+                .unwrap_or_else(|| self.window.width - self.now_playing_sidebar_inset());
             Some(
                 iced::widget::Column::new()
                     .push(self.navigation_bar(nav_width))
@@ -886,12 +955,28 @@ impl Nokkvi {
         let player_bar = widgets::player_bar(&player_bar_data, player_strip)
             .map(Message::PlayerBar)
             .boxed();
+
+        // The Now Playing sidebar, left of the docked content (right of the side
+        // nav when that is on). It stops above the player bar, which runs
+        // under it across the window; lowered beside an artwork column, the
+        // bar docks over the list as usual and the sidebar runs full height.
+        let now_playing_sidebar = self
+            .now_playing_sidebar_shown()
+            .then(|| self.now_playing_sidebar_element(&strip_data));
+        let (docked_bar, bar_below) =
+            if now_playing_sidebar.is_some() && lowered_bar_width.is_none() {
+                (None, Some(player_bar))
+            } else {
+                (Some(player_bar), None)
+            };
         let docked = Self::dock_chrome(
             self.main_content(bleed),
             top_chrome,
-            player_bar,
+            docked_bar,
             lowered_bar_width,
         );
+        // `[sidebar | content]` with the bar below it across the full width.
+        let with_bar_below = move |upper| Self::stack_bar_below(upper, bar_below);
 
         let base_layer: Element<'_, Message> = if crate::theme::is_side_nav() {
             // Settings has no NavView counterpart; the sidebar treats it
@@ -905,6 +990,7 @@ impl Nokkvi {
             let lib = self.library_filter_view_data();
             let side_data = widgets::SideNavBarData {
                 current_view: side_nav_view,
+                tab_order: self.nav_tab_order(),
                 nav_focus: self.nav_focus,
                 settings_open: self.current_view == View::Settings,
                 editor_session_active: self.playlist_editor.is_some(),
@@ -926,14 +1012,31 @@ impl Nokkvi {
             // right column so the sidebar is the visual leftmost band
             // across every row of chrome (matches the flat-redesign
             // side-nav mockups).
-            iced::widget::row![
-                widgets::side_nav_bar(side_data).map(map_nav_bar_message),
-                docked,
-            ]
-            .height(Length::Fill)
-            .boxed()
+            iced::widget::Row::<Element<'_, Message>>::new()
+                .push(
+                    widgets::side_nav_bar(side_data)
+                        .map(map_nav_bar_message)
+                        .boxed(),
+                )
+                .push(with_bar_below(
+                    iced::widget::Row::<Element<'_, Message>>::new()
+                        .extend(now_playing_sidebar)
+                        .push(docked)
+                        .height(Length::Fill)
+                        .boxed(),
+                ))
+                .height(Length::Fill)
+                .boxed()
+        } else if let Some(sidebar) = now_playing_sidebar {
+            // Top and None mode: the docked chrome and content span the window
+            // right of the Now Playing sidebar, the player bar under both.
+            with_bar_below(
+                iced::widget::row![sidebar, docked]
+                    .height(Length::Fill)
+                    .boxed(),
+            )
         } else {
-            // Top and None mode: no sidebar, so the docked chrome and content
+            // Top and None mode with no sidebar: the docked chrome and content
             // span the full window width.
             docked
         };
@@ -942,11 +1045,349 @@ impl Nokkvi {
         // its span: right of the side nav's full-height sidebar, or the
         // bars/lines bleed under the icons, and beside a lowered bar over the
         // list only, clear of the artwork column.
-        self.bottom_band_layers(
-            Stack::new().push(base_layer),
-            widgets::player_bar::player_bar_height(),
+        // The theater panel's enter / leave animation rides on top as two
+        // extra layers pushed after the others, so no layer shifts position
+        // (and loses its state) when the animation starts or ends.
+        self.theater_reveal_layers()
+            .into_iter()
+            .fold(
+                self.bottom_band_layers(
+                    Stack::new().push(base_layer),
+                    widgets::player_bar::player_bar_height(),
+                ),
+                |stack, layer| stack.push(layer),
+            )
+            .boxed()
+    }
+
+    /// The Now Playing sidebar, fed what the strip shows plus the playing
+    /// cover.
+    fn now_playing_sidebar_element<'a>(
+        &'a self,
+        strip: &widgets::track_info_strip::TrackInfoStripData<'a>,
+    ) -> Element<'a, Message> {
+        let is_radio = self.active_playback.is_radio();
+        let (title, artist, album) = if is_radio {
+            (
+                strip.icy_title.or(strip.radio_name).unwrap_or_default(),
+                strip.icy_artist.unwrap_or_default(),
+                strip.radio_name.unwrap_or_default(),
+            )
+        } else {
+            (strip.title, strip.artist, strip.album)
+        };
+        let cover = self
+            .playing_cover()
+            .and_then(|c| c.large.or(c.mini))
+            .filter(|_| !Self::theater_cover_hidden());
+        widgets::now_playing_sidebar::now_playing_sidebar(
+            &widgets::now_playing_sidebar::NowPlayingSidebarData {
+                title,
+                artist,
+                album,
+                cover,
+                is_radio,
+                has_track: is_radio || self.scrobble.current_song_id.is_some(),
+            },
         )
-        .boxed()
+    }
+
+    /// The cover field Theater Mode paints behind its two parts: the
+    /// backdrop while the Cover Art setting hides the cover.
+    fn theater_field() -> iced::Color {
+        if Self::theater_cover_hidden() {
+            crate::widgets::base_slot_list_layout::cover_backdrop()
+        } else {
+            crate::widgets::base_slot_list_layout::artwork_outer_bg()
+        }
+    }
+
+    /// The cover that is rolling out of Theater Mode's place, as an image the
+    /// size of the cover, or an empty placeholder at rest (or when the old
+    /// track had no picture). Always one element, so the layer keeps its place.
+    fn theater_outgoing_cover(&self, side: f32) -> Element<'_, Message> {
+        let now = std::time::Instant::now();
+        match self
+            .theater
+            .roll
+            .as_ref()
+            .and_then(|roll| roll.old_cover.as_ref())
+            .filter(|_| self.theater_roll_progress(now).is_some())
+        {
+            Some(handle) => iced::widget::image(handle.clone())
+                .width(Length::Fixed(side))
+                .height(Length::Fixed(side))
+                .content_fit(iced::ContentFit::Cover)
+                .boxed(),
+            None => iced::widget::Space::new()
+                .width(Length::Fixed(side))
+                .height(Length::Fixed(side))
+                .boxed(),
+        }
+    }
+
+    /// `(outgoing, incoming)` vertical offsets of a track change's roll at
+    /// this moment, in px, over a travel of the whole window height (so the
+    /// pieces leave and arrive across the full screen, not within their own
+    /// bounds); `(0, 0)` at rest.
+    fn theater_roll_offsets(&self) -> (f32, f32) {
+        self.theater_roll_progress(std::time::Instant::now())
+            .map_or((0.0, 0.0), |(direction, progress)| {
+                crate::update::theater::roll_offsets(direction, progress, self.window.height)
+            })
+    }
+
+    /// The lyrics column in `rect`'s size. While a track change rolls, the new
+    /// sheet dissolves in (the viewport's dissolve with nothing outgoing, so
+    /// only its fade-in runs); the sheet that was showing is its own column
+    /// ([`Self::theater_outgoing_lyrics`]), fading out as it leaves.
+    ///
+    /// `appear` (`0.0..=1.0`) fades the whole sheet in on top of that: the
+    /// enter / leave reveal passes its rise, the settled layout `1.0`.
+    fn theater_lyrics_column(&self, rect: iced::Rectangle, appear: f32) -> Element<'_, Message> {
+        match self.queue_lyrics_panel_data() {
+            Some(mut lyrics) => {
+                // The audio crossfade's own dissolve is replaced by the roll's
+                // (and the reveal's fade, and a late sheet's arrival fade,
+                // when they run).
+                let now = std::time::Instant::now();
+                let roll = self
+                    .theater_roll_progress(now)
+                    .map(|(_, progress)| progress);
+                let arrival = self.lyrics.arrival_progress(now);
+                let appear = appear.clamp(0.0, 1.0);
+                lyrics.dissolve =
+                    (roll.is_some() || arrival.is_some() || appear < 1.0).then(|| {
+                        crate::widgets::lyrics_viewport::DissolveView {
+                            lines: &[],
+                            synced: false,
+                            center: 0.0,
+                            progress: roll.unwrap_or(1.0) * arrival.unwrap_or(1.0) * appear,
+                        }
+                    });
+                crate::widgets::lyrics_viewport::lyrics_text_layer(
+                    lyrics,
+                    Some(|delta| Message::Queue(views::QueueMessage::LyricsWheel(delta))),
+                    rect.width,
+                    rect.height,
+                )
+            }
+            None => iced::widget::Space::new()
+                .width(Length::Fixed(rect.width))
+                .height(Length::Fixed(rect.height))
+                .boxed(),
+        }
+    }
+
+    /// The lyric sheet rolling out during a track change: the old lines, at
+    /// the centre they had, fading out (the viewport's outgoing half of a
+    /// dissolve). An empty placeholder at rest or when no sheet was showing.
+    fn theater_outgoing_lyrics(&self, rect: iced::Rectangle) -> Element<'_, Message> {
+        let placeholder = || {
+            iced::widget::Space::new()
+                .width(Length::Fixed(rect.width))
+                .height(Length::Fixed(rect.height))
+                .boxed()
+        };
+        let Some((_, progress)) = self.theater_roll_progress(std::time::Instant::now()) else {
+            return placeholder();
+        };
+        let Some(old) = self
+            .theater
+            .roll
+            .as_ref()
+            .and_then(|roll| roll.old_lyrics.as_ref())
+        else {
+            return placeholder();
+        };
+        crate::widgets::lyrics_viewport::lyrics_text_layer::<Message>(
+            crate::widgets::lyrics_viewport::LyricsPanelData {
+                lines: &[],
+                synced: old.synced,
+                active_index: None,
+                empty_message: None,
+                dissolve: Some(crate::widgets::lyrics_viewport::DissolveView {
+                    lines: &old.lines,
+                    synced: old.synced,
+                    center: old.center,
+                    progress,
+                }),
+                clock_ms: 0,
+                word_highlight: nokkvi_data::types::player_settings::LyricsWordHighlight::Off,
+                align: self.settings.lyrics_alignment,
+                font_scale: self.settings.lyrics_font_size_px as f32
+                    / nokkvi_data::types::player_settings::LYRICS_FONT_SIZE_PX_DEFAULT as f32,
+            },
+            None,
+            rect.width,
+            rect.height,
+        )
+    }
+
+    /// Theater Mode at rest in a `window`: the cover on the left and the
+    /// lyrics column to its right (or the cover alone, centered, with no
+    /// lyrics), on the cover field. Always five layers (field, the cover
+    /// rolling out, the cover, the lyrics rolling out, the lyrics), so the cover's state survives a
+    /// track change and the lyrics coming and going. The moving layers are
+    /// placed in window coordinates and clip to the window, so a rolling
+    /// cover crosses the whole screen.
+    fn theater_composite(&self, window: iced::Size) -> Element<'_, Message> {
+        use crate::{update::theater::theater_geometry, widgets::overflow_pin::OverflowPin};
+
+        let geometry = theater_geometry(window, self.queue_lyrics_panel_data().is_some());
+        let field = Self::theater_field();
+        let lyrics_rect = geometry.lyrics.unwrap_or_default();
+        let (out_y, in_y) = self.theater_roll_offsets();
+        let side = geometry.cover.width;
+        let cover_at = |dy: f32| iced::Point::new(geometry.cover.x, geometry.cover.y + dy);
+        Stack::new()
+            .push(
+                container(iced::widget::Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(move |_theme| container::Style {
+                        background: Some(field.into()),
+                        ..Default::default()
+                    })
+                    .boxed(),
+            )
+            .push(
+                OverflowPin::new(container(self.theater_outgoing_cover(side)))
+                    .position(cover_at(out_y))
+                    .boxed(),
+            )
+            .push(
+                OverflowPin::new(
+                    container(self.theater_cover_panel())
+                        .width(Length::Fixed(side))
+                        .height(Length::Fixed(side)),
+                )
+                .position(cover_at(in_y))
+                .boxed(),
+            )
+            .push(
+                OverflowPin::new(container(self.theater_outgoing_lyrics(lyrics_rect)))
+                    .position(iced::Point::new(lyrics_rect.x, lyrics_rect.y + out_y))
+                    .boxed(),
+            )
+            .push(
+                OverflowPin::new(container(self.theater_lyrics_column(lyrics_rect, 1.0)))
+                    .position(iced::Point::new(lyrics_rect.x, lyrics_rect.y + in_y))
+                    .boxed(),
+            )
+            .boxed()
+    }
+
+    /// The theater animation, as layers for the end of the home `Stack` (empty
+    /// when none runs or an entry still waits for the sidebar cover's bounds).
+    /// A scrim over the window darkens as the panel arrives (and keeps clicks
+    /// off the layout beneath). Then either:
+    /// - the sidebar's cover is on screen: the cover travels between its card
+    ///   and its place in the theater layout while the cover field and the
+    ///   lyrics fade in around it, or
+    /// - there is none: the whole theater layout rises from below the window
+    ///   (and sinks back on the way out).
+    fn theater_reveal_layers(&self) -> Vec<Element<'_, Message>> {
+        use crate::{
+            update::theater::{
+                ease_in_out_cubic, lerp_rect, reveal_fill, rising_rect, theater_geometry,
+            },
+            widgets::overflow_pin::OverflowPin,
+        };
+
+        let Some(reveal) = self.theater.reveal else {
+            return Vec::new();
+        };
+        let Some(fill) = reveal_fill(&reveal, std::time::Instant::now()) else {
+            return Vec::new();
+        };
+        let window = iced::Size::new(self.window.width, self.window.height);
+        let field = Self::theater_field();
+        let black = |alpha: f32| iced::Color {
+            a: alpha,
+            ..iced::Color::BLACK
+        };
+        let scrim_alpha = 0.65 * fill;
+        let scrim = iced::widget::opaque(
+            container(iced::widget::Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_theme| container::Style {
+                    background: Some(black(scrim_alpha).into()),
+                    ..Default::default()
+                }),
+        )
+        .boxed();
+
+        let Some(source) = reveal.rect else {
+            let rect = rising_rect(window, fill);
+            let panel = container(self.theater_composite(window))
+                .width(Length::Fixed(rect.width))
+                .height(Length::Fixed(rect.height))
+                .style(move |_theme| container::Style {
+                    shadow: iced::Shadow {
+                        color: black(0.55 * (1.0 - fill)),
+                        offset: iced::Vector::new(0.0, -8.0),
+                        blur_radius: 28.0,
+                    },
+                    ..Default::default()
+                });
+            return vec![
+                scrim,
+                OverflowPin::new(panel).position(rect.position()).boxed(),
+            ];
+        };
+
+        let geometry = theater_geometry(window, self.queue_lyrics_panel_data().is_some());
+        let cover_rect = lerp_rect(source, geometry.cover, fill);
+        let fade_field = move |alpha: f32| iced::Color {
+            a: field.a * alpha,
+            ..field
+        };
+        let mut layers = vec![
+            scrim,
+            container(iced::widget::Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_theme| container::Style {
+                    background: Some(fade_field(fill).into()),
+                    ..Default::default()
+                })
+                .boxed(),
+        ];
+        // The lyrics rise from below the window, fading in as they come, and
+        // settle with the cover (no backdrop of their own: nothing but the
+        // text moves). The column runs the window's full height with its
+        // active line centered, so the travel is a full column height: at
+        // rest every line starts under the window's bottom edge.
+        if let Some(lyrics_rect) = geometry.lyrics {
+            let rise = ease_in_out_cubic(((fill - 0.2) / 0.8).clamp(0.0, 1.0));
+            layers.push(
+                OverflowPin::new(container(self.theater_lyrics_column(lyrics_rect, rise)))
+                    .position(iced::Point::new(
+                        lyrics_rect.x,
+                        lyrics_rect.y + (1.0 - rise) * lyrics_rect.height * LYRICS_REVEAL_TRAVEL,
+                    ))
+                    .boxed(),
+            );
+        }
+        let cover = container(self.theater_cover_panel())
+            .width(Length::Fixed(cover_rect.width))
+            .height(Length::Fixed(cover_rect.height))
+            .style(move |_theme| container::Style {
+                shadow: iced::Shadow {
+                    color: black(0.45),
+                    offset: iced::Vector::new(0.0, 6.0),
+                    blur_radius: 24.0,
+                },
+                ..Default::default()
+            });
+        layers.push(
+            OverflowPin::new(cover)
+                .position(cover_rect.position())
+                .boxed(),
+        );
+        layers
     }
 
     /// Theater Mode's layout (see `update/theater.rs`). A fixed four-layer
@@ -954,28 +1395,12 @@ impl Nokkvi {
     /// the two bottom-band layers (real or placeholder), and the chrome, which
     /// stays mounted at the same index and only moves.
     fn theater_view<'a>(&'a self, player_bar: Element<'a, Message>) -> Element<'a, Message> {
-        use crate::widgets::{base_slot_list_layout::artwork_outer_bg, overflow_pin::OverflowPin};
+        use crate::widgets::overflow_pin::OverflowPin;
 
-        // The square artwork modes draw their square at the panel's own origin
-        // (the slot-list layouts centre it and paint the letterbox), so the
-        // theater container does both here.
         let now = std::time::Instant::now();
         let menu_open = self.open_menu.is_some();
-        // A hidden cover makes the whole window the backdrop.
-        let field = if Self::theater_cover_hidden() {
-            crate::widgets::base_slot_list_layout::cover_backdrop()
-        } else {
-            artwork_outer_bg()
-        };
-        let panel = container(self.theater_panel())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(iced::alignment::Horizontal::Center)
-            .align_y(iced::alignment::Vertical::Center)
-            .style(move |_theme| container::Style {
-                background: Some(field.into()),
-                ..Default::default()
-            });
+        // The cover on the left, the lyrics beside it, on the cover field.
+        let panel = self.theater_composite(iced::Size::new(self.window.width, self.window.height));
         // The cursor hides on idle, as in a video player. `mouse_area` applies
         // this only where the content reports no interaction of its own, and
         // any other interaction (leaving theater included) restores it.
@@ -1049,11 +1474,12 @@ impl Nokkvi {
             .boxed()
     }
 
-    /// Theater Mode's now-playing panel: the shared artwork panel helper fed
-    /// the PLAYING subject (never the centred row). Radio shows the station's
-    /// art or the tower glyph and no lyrics; the queue shows the playing
-    /// album's cover, the over-cover visualizer and the lyrics.
-    fn theater_panel(&self) -> Element<'_, Message> {
+    /// Theater Mode's cover panel: the shared artwork panel helper fed the
+    /// PLAYING subject (never the centred row). Radio shows the station's art
+    /// or the tower glyph; the queue shows the playing album's cover with the
+    /// over-cover visualizer. The lyrics are a separate column beside it
+    /// ([`Self::theater_composite`]).
+    fn theater_cover_panel(&self) -> Element<'_, Message> {
         use crate::widgets::{
             base_slot_list_layout::{
                 ArtworkPlaceholder, PanelShape, single_artwork_panel_with_visualizer_and_menu,
@@ -1108,11 +1534,15 @@ impl Nokkvi {
             self.theater_now_playing_cover(),
             over_art,
             boat,
-            // Transport-gated and queue-only already (`None` for radio).
-            self.queue_lyrics_panel_data(),
-            Some(|delta| Message::Queue(views::QueueMessage::LyricsWheel(delta))),
+            // The lyrics have their own column beside the cover.
+            None,
+            None::<fn(f32) -> Message>,
             placeholder,
             shape,
+            crate::widgets::beat_scale::CoverScale {
+                factor: self.cover_beat_scale(std::time::Instant::now()),
+                overflow: true,
+            },
             entries,
             menu_open,
             menu_position,
@@ -1295,7 +1725,7 @@ impl Nokkvi {
             let toast_text = iced::widget::text(&toast.message)
                 .color(crate::theme::toast_level_color(toast.level))
                 .font(crate::theme::ui_font())
-                .size(14)
+                .size(crate::theme::fs(14))
                 .width(Length::Fill)
                 .align_x(h_align);
 
@@ -1913,6 +2343,7 @@ impl Nokkvi {
             pane_width: self.queue_pane_width(),
             window_height: self.window.height,
             toolbar_collapsed,
+            toolbar_overlay: crate::theme::is_autohide_toolbar(),
             playlist_comment: self
                 .active_playlist_info
                 .as_ref()
@@ -2057,6 +2488,7 @@ impl Nokkvi {
                 && self
                     .library_page_common(page)
                     .toolbar_collapsed(crate::theme::is_autohide_toolbar(), menu_open),
+            toolbar_overlay: collapsible && crate::theme::is_autohide_toolbar(),
             select_visible,
         }
     }
@@ -2127,6 +2559,7 @@ impl Nokkvi {
             // freezes in place when paused.
             over_art_visualizer,
             over_art_boat,
+            cover_beat_scale: self.cover_beat_scale(std::time::Instant::now()),
             lyrics,
             lyrics_blurred_cover,
         }
@@ -2158,15 +2591,32 @@ impl Nokkvi {
             // The outgoing sheet's dissolve progress is read continuously here
             // (the per-frame tick redraws); the 100 ms playback tick
             // drops the record once it completes.
-            let dissolve = self.lyrics.outgoing.as_ref().and_then(|outgoing| {
-                let progress = outgoing.progress(std::time::Instant::now());
-                (progress < 1.0).then(|| crate::widgets::lyrics_viewport::DissolveView {
-                    lines: &outgoing.doc.lines,
-                    synced: outgoing.synced,
-                    center: outgoing.center,
-                    progress,
+            let now = std::time::Instant::now();
+            let dissolve = self
+                .lyrics
+                .outgoing
+                .as_ref()
+                .and_then(|outgoing| {
+                    let progress = outgoing.progress(now);
+                    (progress < 1.0).then(|| crate::widgets::lyrics_viewport::DissolveView {
+                        lines: &outgoing.doc.lines,
+                        synced: outgoing.synced,
+                        center: outgoing.center,
+                        progress,
+                    })
                 })
-            });
+                // A sheet that landed late fades in on its own (nothing
+                // outgoing: only the incoming half of the dissolve runs).
+                .or_else(|| {
+                    self.lyrics.arrival_progress(now).map(|progress| {
+                        crate::widgets::lyrics_viewport::DissolveView {
+                            lines: &[],
+                            synced: false,
+                            center: 0.0,
+                            progress,
+                        }
+                    })
+                });
             // The "no lyrics" message is a RESOLVED verdict, shown only
             // once this track's resolve has landed (matched_song_id == current).
             // While a resolve is still in flight matched_song_id is None, so the
@@ -2186,6 +2636,8 @@ impl Nokkvi {
                 clock_ms: self.lyrics.clock_ms,
                 word_highlight: self.settings.lyrics_word_highlight,
                 align: self.settings.lyrics_alignment,
+                font_scale: self.settings.lyrics_font_size_px as f32
+                    / nokkvi_data::types::player_settings::LYRICS_FONT_SIZE_PX_DEFAULT as f32,
             }
         })
     }
@@ -2236,6 +2688,7 @@ impl Nokkvi {
         let (strip_context_open, strip_context_position) = strip_context_state(&self.open_menu);
 
         let nav_bar_data = widgets::NavBarViewData {
+            tab_order: self.nav_tab_order(),
             current_view: current_nav_view,
             nav_focus: self.nav_focus,
             editor_session_active: self.playlist_editor.is_some(),
@@ -2692,6 +3145,7 @@ impl Nokkvi {
                     radio_large_art: &self.artwork.radio_large_art.snapshot,
                     over_art_visualizer,
                     over_art_boat,
+                    cover_beat_scale: self.cover_beat_scale(std::time::Instant::now()),
                 };
                 self.radios_page
                     .view(view_data)

@@ -367,6 +367,14 @@ pub enum SettingsMessage {
     SlotListUp,
     /// Navigate slot list down
     SlotListDown,
+    /// Mouse-wheel scroll up in a picker: moves the viewport only, leaving the
+    /// selection alone (`SlotListView::scroll_up`)
+    SlotListScrollUp,
+    /// Mouse-wheel scroll down in a picker (`SlotListView::scroll_down`)
+    SlotListScrollDown,
+    /// Scrollbar seek in a picker: moves the viewport only, no selection
+    /// (`SlotListView::scroll_seek`)
+    SlotListScrollSeek(usize),
     /// Set slot list to specific offset (scrollbar seek — does NOT activate)
     SlotListSetOffset(usize, iced::keyboard::Modifiers),
     /// Item clicked — focus + activate (like clicking then pressing Enter)
@@ -439,6 +447,14 @@ pub(super) fn settings_seek_to(total: usize) -> impl Fn(f32) -> SettingsMessage 
             iced::keyboard::Modifiers::default(),
         )
     }
+}
+
+/// [`settings_seek_to`] for the pickers that scroll without selecting:
+/// the scrollbar moves the viewport only ([`SlotListScrollSeek`]).
+///
+/// [`SlotListScrollSeek`]: SettingsMessage::SlotListScrollSeek
+pub(super) fn settings_scroll_seek_to(total: usize) -> impl Fn(f32) -> SettingsMessage {
+    move |f| SettingsMessage::SlotListScrollSeek((f * total as f32) as usize)
 }
 
 /// Actions that the settings view requests from the parent
@@ -893,6 +909,11 @@ impl SettingsPage {
                 | SettingsMessage::ToggleSearch
                 | SettingsMessage::HotkeyCaptured(..)
                 | SettingsMessage::SubListSearchChanged(_)
+                // Only the theme picker emits the scroll messages, and it
+                // took them above.
+                | SettingsMessage::SlotListScrollUp
+                | SettingsMessage::SlotListScrollDown
+                | SettingsMessage::SlotListScrollSeek(_)
                 | SettingsMessage::Leave => {}
             }
         }
@@ -1240,7 +1261,12 @@ impl SettingsPage {
                 SettingsAction::None
             }
             // These messages are only handled in sub-list mode or capture mode,
-            SettingsMessage::HotkeyCaptured(..)
+            // The theme picker took the scroll messages above; no detail-pane
+            // widget emits them.
+            SettingsMessage::SlotListScrollUp
+            | SettingsMessage::SlotListScrollDown
+            | SettingsMessage::SlotListScrollSeek(_)
+            | SettingsMessage::HotkeyCaptured(..)
             | SettingsMessage::SubListSearchChanged(_)
             // the pill returned at the top,
             | SettingsMessage::Leave

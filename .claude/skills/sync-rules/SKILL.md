@@ -64,10 +64,12 @@ Verify only:
 
 Hard rule: **do not expand CLAUDE.md.** New detail goes in a rule file; CLAUDE.md only points.
 
+`AGENTS.md` (the entry point for non-Claude agents) and `.claude/agents/*.md` get the same rubric: they only point at CLAUDE.md, the rules and the skills, so check that every file and skill they name still exists. The `codebase-map` skill's table rows must name paths that still exist.
+
 ## 7. Commit
 
 ```bash
-git add .claude/rules .claude/skills CLAUDE.md && git commit -m "chore(rules): sync agent rules and skills with current codebase"
+git add .claude/rules .claude/skills .claude/agents CLAUDE.md AGENTS.md && git commit -m "chore(rules): sync agent rules and skills with current codebase"
 ```
 
 Stage only the audited paths — never `git add .claude/` wholesale (it would catch the tracked `.claude/settings.json`). Omit untouched paths from the `git add`. End the commit message at the subject. If nothing changed, skip the commit and say so.

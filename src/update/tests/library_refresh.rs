@@ -1133,12 +1133,10 @@ fn seek_settled_keeps_the_ticked_rows() {
 }
 
 #[test]
-fn seek_settled_after_a_plain_click_focuses_the_centre_row() {
+fn seek_settled_after_a_plain_click_keeps_the_clicked_row() {
     // A plain click leaves its row as a one-row selection that is the focus
-    // marker. The scrollbar drag drops the marker, and the one-row set with
-    // it (as a keyboard step does), so the settle's click focuses the centre
-    // row instead of keeping the clicked row as an unseen selection that
-    // Enter would play and Shift+A would add.
+    // marker. A scrollbar drag moves only the viewport, and the settle's
+    // synthesized click must not move the selection onto the centre row.
     use crate::app_message::SlotListMessage;
 
     let mut app = home_app();
@@ -1159,11 +1157,19 @@ fn seek_settled_after_a_plain_click_focuses_the_centre_row() {
     let _ = app.handle_slot_list_message(SlotListMessage::SeekSettled(View::Albums, gen_id));
 
     let list = &app.albums_page.common.slot_list;
-    assert_eq!(list.selected_offset, Some(25), "the centre row is focused");
+    assert_eq!(
+        list.selected_offset,
+        Some(5),
+        "the clicked row stays focused"
+    );
     assert_eq!(
         list.selected_indices.iter().copied().collect::<Vec<_>>(),
-        [25],
+        [5],
         "and is the only selected row"
+    );
+    assert_eq!(
+        list.viewport_offset, 25,
+        "the viewport stays where it was dragged"
     );
 }
 

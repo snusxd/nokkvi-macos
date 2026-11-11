@@ -59,6 +59,10 @@ pub(crate) struct HoverOverlay<W> {
     /// scale-down still fires). Used by per-theme swatch rows, where the
     /// active-theme accent wash would clash with each row's own palette.
     wash_enabled: bool,
+    /// When `false`, a press keeps the child at full size (the wash still
+    /// darkens). Slot-list rows opt out: the push-in read as the row being
+    /// picked up for a drag.
+    press_scale: bool,
 }
 
 impl<W> HoverOverlay<W> {
@@ -70,7 +74,14 @@ impl<W> HoverOverlay<W> {
             flash_at: None,
             on_accent_surface: false,
             wash_enabled: true,
+            press_scale: true,
         }
+    }
+
+    /// Keep the child at full size on press (`false`); the press wash stays.
+    pub(crate) fn press_scale(mut self, yes: bool) -> Self {
+        self.press_scale = yes;
+        self
     }
 
     /// Suppress the hover/press color wash (the press scale-down still fires).
@@ -221,7 +232,7 @@ where
         let is_pressed = (is_hovered && state.is_mouse_pressed) || is_flashing;
 
         // When pressed, scale the child content down around the slot center
-        if is_pressed {
+        if is_pressed && self.press_scale {
             let cx = bounds.x + bounds.width / 2.0;
             let cy = bounds.y + bounds.height / 2.0;
 

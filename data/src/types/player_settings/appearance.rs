@@ -53,6 +53,49 @@ define_labeled_enum! {
     }
 }
 
+/// UI font size in px: the size of the designed body text, which every other
+/// text run scales with (`px / FONT_SIZE_PX_DEFAULT`). Shared by the setter
+/// clamp, the load-time `validate()`, the stepper's declared `min`/`max` and
+/// the UI's atomic.
+pub const FONT_SIZE_PX_MIN: u32 = 10;
+pub const FONT_SIZE_PX_MAX: u32 = 20;
+pub const FONT_SIZE_PX_DEFAULT: u32 = 14;
+
+define_labeled_enum! {
+    /// The base weight of the UI font. Every text run keeps its own role
+    /// (titles stay bolder than body text) and the whole scale moves by this
+    /// step: [`Self::css_shift`] is added to each run's weight, then the
+    /// result is down-graded to the nearest weight the family ships.
+    ///
+    /// Serializes to snake_case strings in `config.toml` and the redb-backed
+    /// `PersistedPlayerSettings`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum FontWeight {
+        /// Every run one step lighter.
+        Light { label: "Light", wire: "light" },
+        /// Default. Weights as designed.
+        #[default]
+        Regular { label: "Regular", wire: "regular" },
+        /// Every run one step heavier.
+        Medium { label: "Medium", wire: "medium" },
+        /// Body text bold, titles heavier still.
+        Bold { label: "Bold", wire: "bold" },
+    }
+}
+
+impl FontWeight {
+    /// CSS weight added to every text run (400 → 300 / 400 / 500 / 700).
+    pub fn css_shift(self) -> i32 {
+        match self {
+            Self::Light => -100,
+            Self::Regular => 0,
+            Self::Medium => 100,
+            Self::Bold => 300,
+        }
+    }
+}
+
 define_labeled_enum! {
     /// How the player bar draws its seek bar. One value is kept for the
     /// MiniPlayer strip mode and one for every other mode, so each bar starts

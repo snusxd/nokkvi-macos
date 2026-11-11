@@ -126,7 +126,7 @@ pub enum HarbourSectionId {
 }
 
 /// The five one-press random draws of the Random block, in render order —
-/// mirroring the top nav's tab order (`NAV_TABS`: Albums, Artists, Songs,
+/// mirroring the top nav's built-in tab order (`NAV_TABS`: Albums, Artists, Songs,
 /// Genres, Playlists). Activation plays the row's PRE-DRAWN pick — exactly what
 /// the row previews (`play_random_kind` in `update::harbour`); a shelves reload
 /// is what re-rolls it.
@@ -1453,6 +1453,7 @@ impl HarbourPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: None,
             bleed: data.bleed,
         };
 
@@ -1493,8 +1494,8 @@ impl HarbourPage {
             &self.common.slot_list,
             &rows,
             &config,
-            HarbourMessage::SlotList(SlotListPageMessage::NavigateUp),
-            HarbourMessage::SlotList(SlotListPageMessage::NavigateDown),
+            HarbourMessage::SlotList(SlotListPageMessage::ScrollUp),
+            HarbourMessage::SlotList(SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(rows.len(), HarbourMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 HarbourMessage::SlotList,
@@ -1789,7 +1790,7 @@ fn render_row<'a>(
                     .align_y(Alignment::Center)
                     .push(
                         text("See all")
-                            .size(m.metadata_size)
+                            .size(crate::theme::fs(m.metadata_size))
                             .font(theme::ui_font())
                             .color(see_all_color)
                             .boxed(),
@@ -2067,7 +2068,7 @@ fn render_row<'a>(
         }
         HarbourRow::Hint(msg) => container(
             text(msg.clone())
-                .size(ctx.metrics.subtitle_size)
+                .size(crate::theme::fs(ctx.metrics.subtitle_size))
                 .font(theme::ui_font())
                 .color(theme::fg4()),
         )
@@ -2401,7 +2402,7 @@ fn section_pill<'a>(
         )
         .push(
             text(label)
-                .size(11)
+                .size(crate::theme::fs(11))
                 .font(theme::ui_font())
                 .color(theme::accent())
                 .boxed(),
@@ -2413,7 +2414,7 @@ fn section_pill<'a>(
         .push(eyebrow.boxed())
         .push(
             text(title)
-                .size(15)
+                .size(crate::theme::fs(15))
                 .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                 .color(theme::fg0())
                 .width(Length::Fill)
@@ -2421,7 +2422,7 @@ fn section_pill<'a>(
         )
         .push(
             text(meta)
-                .size(12)
+                .size(crate::theme::fs(12))
                 .font(theme::ui_font())
                 .color(theme::fg2())
                 .width(Length::Fill)

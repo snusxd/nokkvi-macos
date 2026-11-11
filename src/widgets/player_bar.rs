@@ -469,6 +469,7 @@ fn mode_descriptor(mode: ModeId, data: &PlayerBarViewData) -> ModeDescriptor {
                 VisualizationMode::Lines => "assets/icons/audio-waveform.svg",
                 VisualizationMode::Scope => "assets/icons/radar.svg",
                 VisualizationMode::Milkdrop => "assets/icons/droplet.svg",
+                VisualizationMode::CoverBeat => "assets/icons/disc-3.svg",
                 VisualizationMode::Bars | VisualizationMode::Off => "assets/icons/audio-lines.svg",
             }),
             tooltip: match data.visualization_mode {
@@ -477,6 +478,7 @@ fn mode_descriptor(mode: ModeId, data: &PlayerBarViewData) -> ModeDescriptor {
                 VisualizationMode::Bars => "Visualizer: Bars",
                 VisualizationMode::Scope => "Visualizer: Scope",
                 VisualizationMode::Milkdrop => "Visualizer: MilkDrop",
+                VisualizationMode::CoverBeat => "Visualizer: Cover Beat",
             },
             // Equals the tooltip verbatim today, but kept as a separate field
             // so a future divergence has a home — do not collapse to one.
@@ -486,6 +488,7 @@ fn mode_descriptor(mode: ModeId, data: &PlayerBarViewData) -> ModeDescriptor {
                 VisualizationMode::Bars => "Visualizer: Bars",
                 VisualizationMode::Scope => "Visualizer: Scope",
                 VisualizationMode::Milkdrop => "Visualizer: MilkDrop",
+                VisualizationMode::CoverBeat => "Visualizer: Cover Beat",
             },
             message: PlayerBarMessage::CycleVisualization,
             active: data.visualization_mode != VisualizationMode::Off,
@@ -1017,7 +1020,7 @@ fn mode_text_toggle(
     enabled: bool,
 ) -> Element<'static, PlayerBarMessage> {
     let mut label_widget = text(label)
-        .size(10.0)
+        .size(crate::theme::fs(10.0))
         .font(theme::weighted_ui_font(Weight::Bold));
     if !enabled {
         label_widget = label_widget.color(theme::fg4());
@@ -1038,7 +1041,7 @@ fn mode_text_toggle(
             btn,
             container(
                 text(tooltip_text.to_owned())
-                    .size(11.0)
+                    .size(crate::theme::fs(11.0))
                     .font(theme::ui_font()),
             )
             .padding(4),
@@ -1085,7 +1088,12 @@ fn mode_toggle_button<'a>(
     HoverOverlay::new(
         tooltip(
             btn,
-            container(text(label).size(11.0).font(theme::ui_font())).padding(4),
+            container(
+                text(label)
+                    .size(crate::theme::fs(11.0))
+                    .font(theme::ui_font()),
+            )
+            .padding(4),
             tooltip::Position::Top,
         )
         .gap(4)
@@ -1229,7 +1237,7 @@ fn mini_player_section(data: &PlayerBarViewData) -> Element<'static, PlayerBarMe
         |value: String, color: Color, bold: bool| -> Element<'static, PlayerBarMessage> {
             let weight = if bold { Weight::Bold } else { Weight::Medium };
             text(value)
-                .size(12.0)
+                .size(crate::theme::fs(12.0))
                 .font(theme::weighted_ui_font(weight))
                 .color(color)
                 .width(Length::Fill)
@@ -1433,7 +1441,7 @@ pub(crate) fn player_bar<'a>(
     } else {
         row![
             text(pos_str.clone())
-                .size(11.0)
+                .size(crate::theme::fs(11.0))
                 .font(theme::ui_font())
                 .color(theme::fg4())
                 .width(Length::Fixed(40.0))
@@ -1441,7 +1449,7 @@ pub(crate) fn player_bar<'a>(
                 .align_y(Alignment::Center),
             seek_bar.height(24.0),
             text(dur_str.clone())
-                .size(11.0)
+                .size(crate::theme::fs(11.0))
                 .font(theme::ui_font())
                 .color(theme::fg4())
                 .width(Length::Fixed(40.0))
@@ -2712,7 +2720,7 @@ mod mode_descriptor_tests {
         assert_eq!(d.kebab_label, "Repeat: Off");
     }
 
-    /// Visualizer couples a dynamic icon to a five-way mode. Pins the
+    /// Visualizer couples a dynamic icon to a six-way mode. Pins the
     /// icon + dual-label pair for every `VisualizationMode`.
     #[test]
     fn visualizer_descriptor_matches_visualization_mode() {
@@ -2741,6 +2749,11 @@ mod mode_descriptor_tests {
                 VisualizationMode::Milkdrop,
                 "assets/icons/droplet.svg",
                 "Visualizer: MilkDrop",
+            ),
+            (
+                VisualizationMode::CoverBeat,
+                "assets/icons/disc-3.svg",
+                "Visualizer: Cover Beat",
             ),
         ];
         for (mode, icon, label) in cases {

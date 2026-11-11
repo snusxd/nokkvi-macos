@@ -152,6 +152,7 @@ pub(crate) fn action_to_message(action: HotkeyAction) -> Message {
         | HotkeyAction::GoHome => Message::Navigation(NavigationMessage::SwitchView(View::Harbour)),
         HotkeyAction::SwitchToSettings => Message::ToggleSettings,
         HotkeyAction::ToggleTheater => Message::Theater(crate::app_message::TheaterMessage::Toggle),
+        HotkeyAction::ToggleNowPlayingSidebar => Message::ToggleNowPlayingSidebar,
         // Playback
         HotkeyAction::TogglePlay
         // The media keys' play/pause, fixed beside the configurable key.
@@ -282,6 +283,16 @@ pub(crate) fn resolve_action(
     config: &HotkeyConfig,
 ) -> Option<HotkeyAction> {
     let keycode = key_press_to_keycode(key, unnamed)?;
+    if modifiers.logo() {
+        if keycode == KeyCode::Char(',')
+            && !modifiers.shift()
+            && !modifiers.control()
+            && !modifiers.alt()
+        {
+            return Some(HotkeyAction::SwitchToSettings);
+        }
+        return None;
+    }
     config.lookup(
         &keycode,
         modifiers.shift(),
@@ -677,5 +688,27 @@ mod tests {
             matches!(msg, Some(Message::Hotkey(HotkeyMessage::ToggleStar))),
             "Custom F5 binding should dispatch ToggleStar"
         );
+    }
+
+    #[test]
+    fn cmd_comma_opens_settings_and_other_cmd_shortcuts_are_ignored() {
+        let config = HotkeyConfig::default();
+        let msg = handle_hotkey(
+            keyboard::Key::Character(",".into()),
+            keyboard::Modifiers::LOGO,
+            &config,
+        );
+        assert!(
+            matches!(msg, Some(Message::ToggleSettings)),
+            "Cmd+, should toggle Settings"
+        );
+
+        // Cmd+C must not trigger a bare 'c' binding.
+        let cmd_c = handle_hotkey(
+            keyboard::Key::Character("c".into()),
+            keyboard::Modifiers::LOGO,
+            &config,
+        );
+        assert!(cmd_c.is_none(), "Cmd+C must not fire a hotkey");
     }
 }

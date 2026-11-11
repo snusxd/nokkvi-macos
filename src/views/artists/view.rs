@@ -69,8 +69,18 @@ impl ArtistsPage {
             show_search: true,
             on_search_change: Box::new(ArtistsMessage::SearchQueryChanged),
             buttons: {
+                let is_favorited = self.common.current_sort_mode == SortMode::Favorited;
+                let fav_target = if is_favorited {
+                    SortMode::Name
+                } else {
+                    SortMode::Favorited
+                };
                 let mut btns = vec![
                     HeaderButton::SortToggle(ArtistsMessage::ToggleSortOrder),
+                    HeaderButton::Favorites {
+                        active: is_favorited,
+                        on_press: ArtistsMessage::SortModeSelected(fav_target),
+                    },
                     HeaderButton::Refresh(ArtistsMessage::SlotList(
                         crate::widgets::SlotListPageMessage::RefreshViewData,
                     )),
@@ -136,6 +146,7 @@ impl ArtistsPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: data.chrome.header_reserve(),
             bleed: data.bleed,
         };
 
@@ -172,8 +183,8 @@ impl ArtistsPage {
             &self.common.slot_list,
             &flattened,
             &config,
-            ArtistsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateUp),
-            ArtistsMessage::SlotList(crate::widgets::SlotListPageMessage::NavigateDown),
+            ArtistsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollUp),
+            ArtistsMessage::SlotList(crate::widgets::SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(flattened.len(), ArtistsMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 ArtistsMessage::SlotList,
@@ -257,7 +268,7 @@ impl ArtistsPage {
 
                 let mut col = column![
                     text(artist.name.clone())
-                        .size(24)
+                        .size(crate::theme::fs(24))
                         .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                         .color(theme::fg0()),
                 ]
@@ -313,7 +324,7 @@ impl ArtistsPage {
 
                     let mut bio_col = column![
                         text(bio_preview)
-                            .size(13)
+                            .size(crate::theme::fs(13))
                             .color(theme::fg1())
                             .font(theme::ui_font())
                             .center()
@@ -324,7 +335,7 @@ impl ArtistsPage {
                     if let Some(url) = link {
                         let read_more_btn = button(
                             text(bio_link_label(url))
-                                .size(11)
+                                .size(crate::theme::fs(11))
                                 .color(theme::accent_bright())
                                 .font(theme::weighted_ui_font(iced::font::Weight::Bold)),
                         )
@@ -744,7 +755,7 @@ pub(crate) fn similar_artists_block<'a>(recs: &'a [ArtistRec]) -> Element<'a, Ar
         .push(rule())
         .push(
             text("SIMILAR ARTISTS")
-                .size(10.5)
+                .size(crate::theme::fs(10.5))
                 .font(theme::weighted_ui_font(iced::font::Weight::Bold))
                 .color(theme::fg3())
                 .boxed(),
@@ -787,7 +798,7 @@ fn similar_artist_chip<'a>(rec: &'a ArtistRec) -> Element<'a, ArtistsMessage> {
     };
     let mut label = row![
         text(rec.name.as_str())
-            .size(12)
+            .size(crate::theme::fs(12))
             .font(theme::ui_font())
             .color(ink)
     ]
@@ -826,7 +837,7 @@ fn similar_artist_chip<'a>(rec: &'a ArtistRec) -> Element<'a, ArtistsMessage> {
         text(crate::widgets::similar_artists_modal::similar_artist_note(
             rec,
         ))
-        .size(11.0)
+        .size(crate::theme::fs(11.0))
         .font(theme::ui_font()),
     )
     .padding(4);

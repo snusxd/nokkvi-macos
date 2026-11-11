@@ -459,7 +459,7 @@ fn status_returns_a_full_state_snapshot() {
     // status is a pure read — it must NOT mutate modes (consume stays off).
     assert_eq!(data.get("consume"), Some(&json!(false)));
     assert_eq!(data.get("theater"), Some(&json!(false)));
-    assert_eq!(data.get("visualizer"), Some(&json!("bars")));
+    assert_eq!(data.get("visualizer"), Some(&json!("off")));
     assert_eq!(data.get("preset"), Some(&serde_json::Value::Null));
 }
 

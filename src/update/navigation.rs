@@ -10,6 +10,7 @@ use crate::{
     Nokkvi, Screen, View,
     app_message::{LoginFailure, LoginProgress, Message, NavigationMessage, PlaybackMessage},
     services, views, widgets,
+    widgets::nav_bar::NavTabOrder,
 };
 
 // === pending-expand helpers ===
@@ -314,7 +315,30 @@ impl Nokkvi {
             NavigationMessage::ExpandTimeout(pending) => {
                 self.handle_pending_expand_timeout(pending)
             }
+            NavigationMessage::ReorderTabs { from, to } => self.handle_reorder_nav_tabs(from, to),
         }
+    }
+
+    /// The nav tabs' order as shown, read from `settings.nav_tab_order`.
+    pub(crate) fn nav_tab_order(&self) -> NavTabOrder {
+        NavTabOrder::from_keys(&self.settings.nav_tab_order)
+    }
+
+    /// Move a dragged nav tab and persist the new order. `from` / `to` index
+    /// the order as shown when the drop happened.
+    pub(crate) fn handle_reorder_nav_tabs(&mut self, from: usize, to: usize) -> Task<Message> {
+        let current = self.nav_tab_order();
+        let order = current.moved(from, to);
+        if order == current {
+            return Task::none();
+        }
+        debug!(" [NAV] Tab moved {from} -> {to}: {:?}", order.views());
+        let keys = order.keys();
+        self.settings.nav_tab_order = keys.clone();
+        self.shell_spawn("persist_nav_tab_order", move |shell| async move {
+            shell.settings().set_nav_tab_order(keys).await
+        });
+        Task::none()
     }
 
     pub(crate) fn handle_session_expired(&mut self) -> Task<Message> {

@@ -15,6 +15,7 @@ use crate::{Nokkvi, app_message::Message, state::ChromeMotion};
 /// early-out (the Lines boat's, say, when the visualizer is off).
 pub(crate) fn handle_frame_tick(app: &mut Nokkvi, now: Instant) -> Task<Message> {
     crate::update::theater::tick(app, now);
+    super::cover_beat::step(app, now);
     step_now_playing_glow(app, now);
     // The Harbour Trawl scene's sea is procedural (a pure function of a phase
     // this step advances), so it is independent of the visualizer mode, the
@@ -103,7 +104,8 @@ impl Nokkvi {
     /// runs (the glow, the lyric clock, the boat), a visualizer mode is on
     /// (its shaders animate on their own clock), Theater Mode's chrome slides
     /// or is due to flip, the Harbour scene shows (its sea breathes while
-    /// paused) or a lyrics glide or dissolve is in flight. Everything else
+    /// paused), a lyrics glide or dissolve is in flight, or a Cover Beat swell
+    /// is still settling (the mode itself counts as a visualizer). Everything else
     /// that animates (a hover wash, the centre flash, the marquee, the seek
     /// bar's and the scrollbar's fades, the roulette) requests its own frames,
     /// and the 10 Hz position tick redraws the rest. `subscription()` is
@@ -118,6 +120,7 @@ impl Nokkvi {
             || self.theater_in_motion(now)
             || self.harbour_scene_on_screen()
             || self.lyrics_in_motion(now)
+            || self.cover_beat.in_motion(now)
     }
 
     /// Theater Mode's chrome sliding, or due to flip: `theater::tick` flips it
@@ -127,6 +130,21 @@ impl Nokkvi {
     /// 10 Hz tick re-reads the subscription, so a hide deadline is met within
     /// a tick, and a mouse move raises its own update.
     fn theater_in_motion(&self, now: Instant) -> bool {
+        // A track change rolling the cover and the lyrics over.
+        if self.theater.roll.as_ref().is_some_and(|roll| {
+            now.saturating_duration_since(roll.since) < super::theater::ROLL_DURATION
+        }) {
+            return true;
+        }
+        // The panel's enter / leave animation, which outlives `active` on the
+        // way out.
+        if self.theater.reveal.is_some_and(|r| {
+            r.since.is_some_and(|since| {
+                now.saturating_duration_since(since) < super::theater::REVEAL_DURATION
+            })
+        }) {
+            return true;
+        }
         if !self.theater.active {
             return false;
         }
@@ -151,7 +169,7 @@ impl Nokkvi {
         if !self.settings.lyrics_mode.is_active() {
             return false;
         }
-        if self.lyrics.outgoing.is_some() {
+        if self.lyrics.outgoing.is_some() || self.lyrics.arrival_progress(now).is_some() {
             return true;
         }
         self.lyrics.matched_song_id.is_some()

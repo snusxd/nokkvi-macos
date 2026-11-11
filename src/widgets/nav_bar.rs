@@ -53,11 +53,100 @@ impl NavView {
 const _: [(); 7 - NavView::ALL.len()] = [];
 const _: [(); NavView::ALL.len() - 7] = [];
 
+impl NavView {
+    /// The key a tab's place persists under (`nav_tab_order` in config.toml).
+    /// Wire strings: never rename one.
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Albums => "albums",
+            Self::Artists => "artists",
+            Self::Songs => "songs",
+            Self::Genres => "genres",
+            Self::Playlists => "playlists",
+            Self::Radios => "radio",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|view| view.key() == key)
+    }
+
+    /// This tab's `(label, icon_path)` from [`NAV_TABS`].
+    pub(crate) fn tab(self) -> (&'static str, &'static str) {
+        NAV_TABS
+            .iter()
+            .find(|(_, _, view)| *view == self)
+            .map_or(("", ""), |&(label, icon, _)| (label, icon))
+    }
+}
+
+/// The order the nav tabs show in, both bars: the user's, set by dragging a
+/// tab (`general.nav_tab_order`), always a permutation of [`NavView::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NavTabOrder([NavView; 7]);
+
+impl Default for NavTabOrder {
+    fn default() -> Self {
+        Self([
+            NavView::Queue,
+            NavView::Albums,
+            NavView::Artists,
+            NavView::Songs,
+            NavView::Genres,
+            NavView::Playlists,
+            NavView::Radios,
+        ])
+    }
+}
+
+impl NavTabOrder {
+    /// Read a persisted order: known keys in their order (a repeat counts
+    /// once), then any tab the list misses in the built-in order, so a hand
+    /// edit or a tab added in a later version never hides a tab.
+    pub(crate) fn from_keys(keys: &[String]) -> Self {
+        let mut order = Self::default().0;
+        let mut placed = 0;
+        let listed = keys.iter().filter_map(|key| NavView::from_key(key));
+        for view in listed.chain(NavView::ALL.iter().copied()) {
+            if !order[..placed].contains(&view) {
+                order[placed] = view;
+                placed += 1;
+            }
+        }
+        Self(order)
+    }
+
+    /// The keys to persist.
+    pub(crate) fn keys(&self) -> Vec<String> {
+        self.0.iter().map(|view| view.key().to_string()).collect()
+    }
+
+    pub(crate) fn views(&self) -> &[NavView; 7] {
+        &self.0
+    }
+
+    /// The tab at `from` moved to index `to` of the new order (a `DragStrip`
+    /// drop). Out-of-range indices change nothing.
+    pub(crate) fn moved(self, from: usize, to: usize) -> Self {
+        let len = self.0.len();
+        if from >= len || to >= len {
+            return self;
+        }
+        let mut views = self.0.to_vec();
+        let view = views.remove(from);
+        views.insert(to, view);
+        let mut order = self.0;
+        order.copy_from_slice(&views);
+        Self(order)
+    }
+}
+
 /// The nav item the keyboard highlights (`Nokkvi.nav_focus`): how a TV remote,
 /// which has arrows and OK but no pointer or number keys, reaches the views.
 /// Focus Navigation (a remote's Menu) puts it on the current view's item; the
-/// arrows walk [`NavFocus::ORDER`], the bar's on-screen order in both layouts
-/// (the tabs, then the pinned Harbour longship).
+/// arrows walk [`NavFocus::order`], the bar's on-screen order in both layouts
+/// (the tabs in the user's [`NavTabOrder`], then the pinned Harbour longship).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NavFocus {
     Tab(NavView),
@@ -65,26 +154,26 @@ pub(crate) enum NavFocus {
 }
 
 impl NavFocus {
-    pub(crate) const ORDER: [Self; 8] = [
-        Self::Tab(NavView::Queue),
-        Self::Tab(NavView::Albums),
-        Self::Tab(NavView::Artists),
-        Self::Tab(NavView::Songs),
-        Self::Tab(NavView::Genres),
-        Self::Tab(NavView::Playlists),
-        Self::Tab(NavView::Radios),
-        Self::Harbour,
-    ];
+    /// The bar's items in on-screen order: the tabs as `tabs` orders them,
+    /// then the pinned Harbour longship.
+    pub(crate) fn order(tabs: &NavTabOrder) -> [Self; 8] {
+        let mut order = [Self::Harbour; 8];
+        for (slot, view) in order.iter_mut().zip(tabs.views()) {
+            *slot = Self::Tab(*view);
+        }
+        order
+    }
 
     /// The neighbouring item, stopping at either end (the bar doesn't wrap).
-    pub(crate) fn step(self, forward: bool) -> Self {
-        let i = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
+    pub(crate) fn step(self, forward: bool, tabs: &NavTabOrder) -> Self {
+        let order = Self::order(tabs);
+        let i = order.iter().position(|f| *f == self).unwrap_or(0);
         let next = if forward {
-            (i + 1).min(Self::ORDER.len() - 1)
+            (i + 1).min(order.len() - 1)
         } else {
             i.saturating_sub(1)
         };
-        Self::ORDER[next]
+        order[next]
     }
 }
 
@@ -114,6 +203,8 @@ pub(crate) fn nav_tab_colors(
 #[derive(Debug, Clone)]
 pub(crate) struct NavBarViewData {
     pub current_view: NavView,
+    /// The tabs' order (`general.nav_tab_order`); dragging a tab changes it.
+    pub tab_order: NavTabOrder,
     /// The keyboard-highlighted item (Focus Navigation), drawn as an inverted
     /// chip (`nav_tab_colors`).
     pub nav_focus: Option<NavFocus>,
@@ -191,6 +282,12 @@ pub(crate) struct NavBarViewData {
 #[derive(Debug, Clone)]
 pub enum NavBarMessage {
     SwitchView(NavView),
+    /// A tab was dragged from index `from` to index `to` of the shown order
+    /// (`DragStrip`); bubbled to root, which persists the new order.
+    ReorderTabs {
+        from: usize,
+        to: usize,
+    },
     /// Navigate to the contextual playlist-editor view (the "Editing" pill).
     /// Carries no `NavView` — the editor has no permanent tab.
     SwitchToEditor,
@@ -244,6 +341,10 @@ const NAV_PILL_HEIGHT: f32 = 32.0;
 /// cluster and the tab strip in rounded mode (matches design's 22 px
 /// divider centered in the tray).
 const NAV_DIVIDER_HEIGHT: f32 = 22.0;
+
+/// The tab strip's share of a lane its tabs split with the Settings /
+/// Editing cells (each `FillPortion(1)`): one share per tab.
+pub(crate) const TAB_COUNT_PORTION: u16 = NavView::ALL.len() as u16;
 
 /// Ordered list of navigation tabs — single source of truth shared with `side_nav_bar`.
 /// Each entry: (label, icon_path, NavView).
@@ -419,7 +520,7 @@ fn tab_content<'a>(
         // the natural width.
         NavDisplayMode::TextOnly => container(
             text(label.to_uppercase())
-                .size(text_size)
+                .size(crate::theme::fs(text_size))
                 .font(theme::weighted_ui_font(Weight::Bold))
                 .align_x(iced::alignment::Horizontal::Center)
                 .wrapping(iced::widget::text::Wrapping::None)
@@ -440,7 +541,7 @@ fn tab_content<'a>(
             row![
                 colored_icon(icon_path, icon_size, text_color),
                 text(label.to_uppercase())
-                    .size(text_size)
+                    .size(crate::theme::fs(text_size))
                     .font(theme::weighted_ui_font(Weight::Bold))
                     .wrapping(iced::widget::text::Wrapping::None),
             ]
@@ -667,10 +768,11 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
     // the matching tray bg), flat mode shrinks to the bar's actual
     // content height so the open-state accent_bright pill doesn't escape
     // past the bar's top/bottom edges (flat mode has zero tray padding).
+    let flat_top_inset: f32 = if cfg!(target_os = "macos") { 2.0 } else { 0.0 };
     let cluster_pill_h = if theme::is_rounded_mode() {
         NAV_PILL_HEIGHT
     } else {
-        theme::nav_bar_height() - 1.0
+        theme::nav_bar_height() - 1.0 - flat_top_inset
     };
     let hamburger: Element<'static, NavBarMessage> = super::hover_overlay::HoverOverlay::new(
         HamburgerMenu::new(
@@ -794,35 +896,77 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
     } else {
         Length::Shrink
     };
-    let mut left_section: iced::widget::Row<Element<'static, NavBarMessage>> = {
-        let mut tabs = row![hamburger, library_trigger_slot, tab_separator(true)]
-            .spacing(tab_spacing)
+    // The tabs ride in a `DragStrip`: press and drag one along the bar to
+    // move it (`ReorderTabs`), a plain press still switches the view.
+    // Flat mode → each tab carries its trailing 1 px `border()` rule, so the
+    //   rule travels with the tab and the strip needs no spacing.
+    // Rounded mode → the pills float `NAV_TRAY_GAP` apart with the old
+    //   invisible 1 px rule's width between them, keeping the pre-drag
+    //   spacing; only the closing divider after the strip is visible.
+    let tab_strip = {
+        let strip_spacing = if is_rounded {
+            2.0 * NAV_TRAY_GAP + 1.0
+        } else {
+            0.0
+        };
+        let mut strip = super::drag_strip::DragStrip::new(super::drag_strip::StripAxis::Horizontal)
+            .spacing(strip_spacing)
             .height(Length::Fill)
-            .width(left_row_width)
-            .align_y(Alignment::Center);
-        let tab_count = NAV_TABS.len();
-        for (i, &(label, icon_path, view)) in NAV_TABS.iter().enumerate() {
-            let is_last = i == tab_count - 1;
+            // Expanding, the strip holds one `FillPortion(1)` share per tab,
+            // so it splits the lane with the Settings / Editing tabs exactly
+            // as the tabs did as direct children of the row.
+            .width(if tabs_expand {
+                Length::FillPortion(TAB_COUNT_PORTION)
+            } else {
+                Length::Shrink
+            })
+            .align(Alignment::Center)
+            .on_reorder(|from, to| NavBarMessage::ReorderTabs { from, to });
+        for &view in data.tab_order.views() {
+            let (label, icon_path) = view.tab();
             // No regular tab is active while editing (current_view falls back
             // to Queue for the tab-less editor view) — the editor pill carries
             // the active state instead.
             let is_active = !settings_open && !editor_active && !harbour_active && current == view;
-            tabs = tabs.push(nav_tab(
+            let tab = nav_tab(
                 label,
                 icon_path,
                 is_active,
                 nav_focus == Some(NavFocus::Tab(view)),
                 NavBarMessage::SwitchView(view),
-            ));
-            // Inter-tab separator: flat draws one between every pair;
-            // rounded mode skips since pills are gap-spaced. The trailing
-            // separator before the metadata strip is force-visible so the
-            // metadata reads as a distinct band in both modes.
-            if !is_last {
-                tabs = tabs.push(tab_separator(false));
-            } else if !settings_open {
-                tabs = tabs.push(tab_separator(true));
-            }
+            );
+            let cell: Element<'static, NavBarMessage> = if is_rounded {
+                tab
+            } else {
+                row![tab, tab_separator(false)]
+                    .width(if tabs_expand {
+                        Length::FillPortion(1)
+                    } else {
+                        Length::Shrink
+                    })
+                    .height(Length::Fill)
+                    .align_y(Alignment::Center)
+                    .boxed()
+            };
+            strip = strip.push(cell);
+        }
+        strip
+    };
+    let mut left_section: iced::widget::Row<Element<'static, NavBarMessage>> = {
+        let mut tabs = row![
+            hamburger,
+            library_trigger_slot,
+            tab_separator(true),
+            tab_strip.boxed()
+        ]
+        .spacing(tab_spacing)
+        .height(Length::Fill)
+        .width(left_row_width)
+        .align_y(Alignment::Center);
+        // The separator closing the strip before the metadata band; flat mode
+        // already drew it as the last tab's own rule.
+        if is_rounded && !settings_open {
+            tabs = tabs.push(tab_separator(true));
         }
         tabs
     };
@@ -914,7 +1058,7 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
             // Stopped state - no track loaded
             container(
                 text("No track loaded")
-                    .size(13.0)
+                    .size(crate::theme::fs(13.0))
                     .font(theme::weighted_ui_font(Weight::Semibold))
                     .color(theme::fg4())
                     .wrapping(Wrapping::None),
@@ -981,7 +1125,7 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
                         info_row = info_row.push(
                             iced::widget::row![
                                 super::marquee_text::marquee_text(merged)
-                                    .size(10.0)
+                                    .size(crate::theme::fs(10.0).0)
                                     .font(theme::ui_font())
                                     .color(nav_strip_text(theme::fg2()))
                                     .align_x(iced::alignment::Horizontal::Center),
@@ -1021,7 +1165,7 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
                     info_row = info_row.push(
                         iced::widget::row![
                             super::marquee_text::marquee_text(merged)
-                                .size(10.0)
+                                .size(crate::theme::fs(10.0).0)
                                 .font(theme::ui_font())
                                 .color(nav_strip_text(theme::fg2()))
                                 .align_x(iced::alignment::Horizontal::Center),
@@ -1103,7 +1247,7 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
                 let mut fmt_row = row![
                     fmt_sep(),
                     text(combined)
-                        .size(10.0)
+                        .size(crate::theme::fs(10.0).0)
                         .font(theme::weighted_ui_font(Weight::Medium))
                         .color(nav_strip_text(theme::fg3()))
                         .wrapping(Wrapping::None),
@@ -1208,7 +1352,33 @@ pub(crate) fn nav_bar(data: NavBarViewData) -> Element<'static, NavBarMessage> {
     // honest. Content fills `nav_bar_height() - 1`.
     let total_height = theme::nav_bar_height();
 
-    container(column![nav_content, bottom_separator])
+    // On macOS, AppKit's `_NSTitlebarDecorationView` composites a 1 pt
+    // translucent separator line over row y=0 of `contentView`. In flat mode
+    // (where `tray_padding.top == 0`), an active tab's `accent_fill()` at y=0
+    // bleeds underneath that titlebar separator and visually overlaps the
+    // system titlebar. Keeping 1 px of `bg0_hard()` at y=0 plus a 1 px
+    // `theme::border()` top separator cleanly divides the system titlebar from
+    // the flat nav bar without changing `total_height`.
+    let bar_column = if cfg!(target_os = "macos") && !theme::is_rounded_mode() {
+        let titlebar_guard: Element<'static, NavBarMessage> = container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(theme::container_bg0_hard)
+            .boxed();
+        let top_separator: Element<'static, NavBarMessage> = container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(move |_| container::Style {
+                background: Some(theme::border().into()),
+                ..Default::default()
+            })
+            .boxed();
+        column![titlebar_guard, top_separator, nav_content, bottom_separator]
+    } else {
+        column![nav_content, bottom_separator]
+    };
+
+    container(bar_column)
         .height(Length::Fixed(total_height))
         .boxed()
 }

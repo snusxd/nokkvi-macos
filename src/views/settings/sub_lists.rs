@@ -327,6 +327,10 @@ impl SettingsPage {
             | SettingsMessage::SidebarSetOffset(_, _)
             | SettingsMessage::SidebarClickItem(_)
             | SettingsMessage::JumpToSection(_)
+            | SettingsMessage::SlotListScrollUp
+            | SettingsMessage::SlotListScrollDown
+            | SettingsMessage::SlotListScrollSeek(_)
+            // Only the theme picker emits the scroll messages above.
             // Handled in `SettingsPage::update` before any sub-list sees it.
             | SettingsMessage::Leave => SettingsAction::None,
         }
@@ -400,6 +404,10 @@ impl SettingsPage {
             | SettingsMessage::SidebarSetOffset(_, _)
             | SettingsMessage::SidebarClickItem(_)
             | SettingsMessage::JumpToSection(_)
+            | SettingsMessage::SlotListScrollUp
+            | SettingsMessage::SlotListScrollDown
+            | SettingsMessage::SlotListScrollSeek(_)
+            // Only the theme picker emits the scroll messages above.
             // Handled in `SettingsPage::update` before any sub-list sees it.
             | SettingsMessage::Leave => SettingsAction::None,
         }
@@ -423,6 +431,21 @@ impl SettingsPage {
             }
             SettingsMessage::SlotListDown => {
                 tsw.slot_list.move_down(total);
+                SettingsAction::None
+            }
+            SettingsMessage::SlotListScrollUp => {
+                tsw.slot_list.scroll_up(total);
+                tsw.slot_list.record_scroll();
+                SettingsAction::None
+            }
+            SettingsMessage::SlotListScrollDown => {
+                tsw.slot_list.scroll_down(total);
+                tsw.slot_list.record_scroll();
+                SettingsAction::None
+            }
+            SettingsMessage::SlotListScrollSeek(offset) => {
+                tsw.slot_list.scroll_seek(offset, total);
+                tsw.slot_list.record_scroll();
                 SettingsAction::None
             }
             SettingsMessage::SlotListSetOffset(offset, _)
@@ -491,7 +514,7 @@ impl SettingsPage {
         if sub.colors.is_empty() {
             return container(
                 text("Empty gradient")
-                    .size(14)
+                    .size(crate::theme::fs(14))
                     .font(theme::ui_font())
                     .color(theme::fg4()),
             )
@@ -549,7 +572,7 @@ impl SettingsPage {
         // "you're inside a color editor right now". No path-y breadcrumb
         // needed.
         let title = text(label_for_title)
-            .size(13.0)
+            .size(crate::theme::fs(13.0))
             .color(theme::fg0())
             .font(theme::weighted_ui_font(Weight::Bold));
         let back_btn = button(

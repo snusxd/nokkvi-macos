@@ -17,9 +17,9 @@ use crate::{
             ARTWORK_VERTICAL_HEIGHT_PCT_DEFAULT, ARTWORK_VERTICAL_HEIGHT_PCT_MAX,
             ARTWORK_VERTICAL_HEIGHT_PCT_MIN, AUTOHIDE_TOOLBAR_HEIGHT_MAX,
             AUTOHIDE_TOOLBAR_HEIGHT_MIN, ArtworkColumnMode, ArtworkCover, ArtworkStretchFit,
-            CollapsedAppearance, IconSet, NavDisplayMode, NavLayout, ScrollbarVisibility,
-            SeekbarStyle, SlotRowHeight, StripClickAction, StripSeparator, TheaterControls,
-            TrackInfoDisplay,
+            CollapsedAppearance, CoverBeatStrength, FONT_SIZE_PX_MAX, FONT_SIZE_PX_MIN, FontWeight,
+            IconSet, NavDisplayMode, NavLayout, ScrollbarVisibility, SeekbarStyle, SlotRowHeight,
+            StripClickAction, StripSeparator, TheaterControls, TrackInfoDisplay,
         },
         setting_def::Tab,
         settings_data::InterfaceSettingsData,
@@ -110,6 +110,23 @@ define_settings! {
                 default: "Default",
                 options: SlotRowHeight::LABELS,
                 read_field: |d| d.slot_row_height.as_ref(),
+            },
+        },
+        NowPlayingSidebar {
+            key: "general.now_playing_sidebar",
+            value_type: Bool,
+            setter: |mgr, v: bool| mgr.set_now_playing_sidebar(v),
+            toml_apply: |ts, p| p.now_playing_sidebar = ts.now_playing_sidebar,
+            read: |src, out| out.now_playing_sidebar = src.now_playing_sidebar,
+            write: |ps, ts| ts.now_playing_sidebar = ps.now_playing_sidebar,
+            ui_meta: {
+                label: "Now Playing Sidebar",
+                category: "Layout",
+                subtitle: Some(
+                    "A sidebar left of the content with the playing track's title, artist and album card",
+                ),
+                default: false,
+                read_field: |d| d.now_playing_sidebar,
             },
         },
         HorizontalVolume {
@@ -237,6 +254,44 @@ define_settings! {
                 default: "Phosphor",
                 options: IconSet::LABELS,
                 read_field: |d| d.icon_set.as_ref(),
+            },
+        },
+        FontSizePx {
+            key: "general.font_size_px",
+            value_type: Int,
+            setter: |mgr, v: i64| mgr.set_font_size_px(v as u32),
+            toml_apply: |ts, p| p.font_size_px = ts.font_size_px,
+            read: |src, out| out.font_size_px = src.font_size_px,
+            write: |ps, ts| ts.font_size_px = ps.font_size_px,
+            ui_meta: {
+                label: "Font Size",
+                category: "Font & Icons",
+                subtitle: Some("Scales all text; 14px is the designed size"),
+                default: 14_i64,
+                min: i64::from(FONT_SIZE_PX_MIN),
+                max: i64::from(FONT_SIZE_PX_MAX),
+                step: 1_i64,
+                unit: "px",
+                read_field: |d| d.font_size_px,
+            },
+        },
+        FontWeightSetting {
+            key: "general.font_weight",
+            value_type: Enum,
+            setter: |mgr, v: String| mgr.set_font_weight(FontWeight::from_label(&v)),
+            toml_apply: |ts, p| p.font_weight = ts.font_weight,
+            read: |src, out| out.font_weight = src.font_weight,
+            write: |ps, ts| ts.font_weight = ps.font_weight,
+            ui_meta: {
+                label: "Font Weight",
+                category: "Font & Icons",
+                subtitle: Some(
+                    "Shifts every text weight one step; a font that lacks a weight \
+                     uses its nearest one",
+                ),
+                default: "Regular",
+                options: FontWeight::LABELS,
+                read_field: |d| d.font_weight.as_ref(),
             },
         },
         MiniPlayerShowVolume {
@@ -543,6 +598,26 @@ define_settings! {
                 read_field: |d| d.theater_window_fullscreen,
             },
         },
+        CoverBeatStrengthSetting {
+            key: "general.cover_beat_strength",
+            value_type: Enum,
+            setter: |mgr, v: String| mgr.set_cover_beat_strength(CoverBeatStrength::from_label(&v)),
+            toml_apply: |ts, p| p.cover_beat_strength = ts.cover_beat_strength,
+            read: |src, out| out.cover_beat_strength = src.cover_beat_strength,
+            write: |ps, ts| ts.cover_beat_strength = ps.cover_beat_strength,
+            ui_meta: {
+                label: "Cover Beat Strength",
+                category: "Artwork Column",
+                subtitle: Some(
+                    "How far the Cover Beat visualizer (the last stop of the visualizer \
+                     button) swells the cover on each kick drum. Subtle is a gentle pulse, \
+                     Punchy a clear bump",
+                ),
+                default: "Subtle",
+                options: CoverBeatStrength::LABELS,
+                read_field: |d| d.cover_beat_strength.as_ref(),
+            },
+        },
         ArtworkAutoMaxPctSetting {
             key: "general.artwork_auto_max_pct",
             value_type: Float,
@@ -609,6 +684,14 @@ define_settings! {
             read: |src, out| out.artwork_column_width_pct = src.artwork_column_width_pct,
             write: |ps, ts| ts.artwork_column_width_pct = ps.artwork_column_width_pct,
         },
+        // `nav_tab_order` persists from dragging a nav tab (the root
+        // `ReorderNavTabs` handler) — no UI row, like the width above.
+        NavTabOrder {
+            key: "interface.nav_tab_order",
+            toml_apply: |ts, p| p.nav_tab_order = ts.nav_tab_order.clone(),
+            read: |src, out| out.nav_tab_order = src.nav_tab_order.clone(),
+            write: |ps, ts| ts.nav_tab_order = ps.nav_tab_order.clone(),
+        },
     ]
 }
 
@@ -652,6 +735,9 @@ mod tests {
             slot_text_links: true,
             scrollbar_visibility: "Always".into(),
             icon_set: "Phosphor".into(),
+            font_size_px: 14,
+            font_weight: "Regular".into(),
+            now_playing_sidebar: false,
             font_family: "".into(),
             strip_show_title: true,
             strip_show_artist: true,
@@ -670,6 +756,7 @@ mod tests {
             artwork_cover: "Show".into(),
             theater_controls: "Auto-hide".into(),
             theater_window_fullscreen: false,
+            cover_beat_strength: "Subtle".into(),
             artwork_auto_max_pct: 0.40,
             artwork_vertical_height_pct: 0.40,
         }
@@ -677,17 +764,18 @@ mod tests {
 
     /// 22 entries get ui_meta — 5 Layout + 5 Slot List (autohide toggle +
     /// collapsed-appearance + hidden-height + grip + scrollbar visibility) +
-    /// 1 Views + 1 Appearance (icon set) + 4 Metadata Strip + 4 Artwork Column
+    /// 1 Views + 1 Appearance (icon set) + 2 Font & Icons (size, weight) + 4 Metadata Strip + 4 Artwork Column
     /// (mode dropdown + cover art dropdown + auto-max-pct slider +
-    /// vertical-height slider) + 2 Theater (controls + fills the screen). The
+    /// vertical-height slider + cover beat strength) + 2 Theater (controls + fills
+    /// the screen). The
     /// mini-player show-volume/show-modes toggles and the 8 ToggleSet sub-keys
     /// (`strip_show_*`, `*_artwork_overlay`) plus the conditional
     /// `artwork_column_stretch_fit` stay hand-written.
     #[test]
-    fn build_interface_tab_settings_items_emits_twenty_four_rows() {
+    fn build_interface_tab_settings_items_emits_twenty_eight_rows() {
         let data = default_interface_data();
         let entries = build_interface_tab_settings_items(&data);
-        assert_eq!(entries.len(), 24);
+        assert_eq!(entries.len(), 28);
         for e in &entries {
             assert!(matches!(e, SettingsEntry::Item(_)));
         }
@@ -879,18 +967,22 @@ mod tests {
         let mut ts = TomlSettings::default();
         ts.theater_controls = TheaterControls::AlwaysShown;
         ts.theater_window_fullscreen = true;
+        ts.cover_beat_strength = CoverBeatStrength::Punchy;
         let mut p = PersistedPlayerSettings::default();
         apply_toml_interface_tab(&ts, &mut p);
         assert_eq!(p.theater_controls, TheaterControls::AlwaysShown);
         assert!(p.theater_window_fullscreen);
+        assert_eq!(p.cover_beat_strength, CoverBeatStrength::Punchy);
 
         let mut live = crate::types::player_settings::LivePlayerSettings::default();
         live.theater_controls = p.theater_controls;
         live.theater_window_fullscreen = p.theater_window_fullscreen;
+        live.cover_beat_strength = p.cover_beat_strength;
         let mut back = TomlSettings::default();
         write_interface_tab_toml(&live, &mut back);
         assert_eq!(back.theater_controls, TheaterControls::AlwaysShown);
         assert!(back.theater_window_fullscreen);
+        assert_eq!(back.cover_beat_strength, CoverBeatStrength::Punchy);
     }
 
     #[test]
@@ -913,16 +1005,20 @@ mod tests {
         assert!(keys.contains(&"general.artwork_cover"));
         assert!(keys.contains(&"general.theater_controls"));
         assert!(keys.contains(&"general.theater_window_fullscreen"));
+        assert!(keys.contains(&"general.cover_beat_strength"));
         assert!(keys.contains(&"general.autohide_toolbar"));
         assert!(keys.contains(&"general.autohide_toolbar_height"));
         assert!(keys.contains(&"general.autohide_toolbar_grip"));
         assert!(keys.contains(&"general.autohide_collapsed_appearance"));
         assert!(keys.contains(&"general.scrollbar_visibility"));
         assert!(keys.contains(&"general.icon_set"));
+        assert!(keys.contains(&"general.font_size_px"));
+        assert!(keys.contains(&"general.font_weight"));
+        assert!(keys.contains(&"general.now_playing_sidebar"));
         assert!(keys.contains(&"general.seekbar_style"));
         assert!(keys.contains(&"general.mini_player_seekbar_style"));
         assert!(keys.contains(&"general.mini_player_show_artwork"));
-        assert_eq!(keys.len(), 36);
+        assert_eq!(keys.len(), 40);
     }
 
     /// Read-side: `dump_interface_tab_player_settings` copies the migrated

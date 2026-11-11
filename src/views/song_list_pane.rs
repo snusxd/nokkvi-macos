@@ -273,7 +273,7 @@ where
             }
             if column_visibility.thumbnail {
                 use crate::widgets::slot_list::slot_list_artwork_column;
-                content_row = content_row.push(slot_list_artwork_column(
+                let thumbnail = slot_list_artwork_column(
                     cover_key.as_deref().and_then(|key| {
                         crate::views::mini_or_placeholder(album_art, placeholders, key)
                     }),
@@ -281,7 +281,8 @@ where
                     ctx.is_center,
                     is_current,
                     ctx.opacity,
-                ));
+                );
+                content_row = content_row.push(thumbnail);
             }
             content_row = content_row.push({
                 use crate::widgets::slot_list::{SlotTextColumn, slot_list_text_column};
@@ -318,7 +319,7 @@ where
                         let make_link =
                             |label: String, font_size: f32, click: M| -> Element<'_, M> {
                                 crate::widgets::link_text::LinkText::new(label)
-                                    .size(font_size)
+                                    .size(crate::theme::fs(font_size))
                                     .color(style.subtext_color)
                                     .hover_color(style.hover_text_color)
                                     .font(crate::theme::ui_font())
@@ -492,8 +493,8 @@ where
             slot_list,
             songs,
             list_config,
-            on_up(SongListRowEvent::Slot(SlotListPageMessage::NavigateUp)),
-            on_down(SongListRowEvent::Slot(SlotListPageMessage::NavigateDown)),
+            on_up(SongListRowEvent::Slot(SlotListPageMessage::ScrollUp)),
+            on_down(SongListRowEvent::Slot(SlotListPageMessage::ScrollDown)),
             crate::views::scroll_seek_msg(songs.len(), move |m| on_seek(SongListRowEvent::Slot(m))),
             move |d| on_drag(SongListRowEvent::Drag(d)),
             Some(SlotHoverCallback::new(

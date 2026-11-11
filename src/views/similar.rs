@@ -373,6 +373,7 @@ impl SimilarPage {
             window_height: data.window_height,
             show_artwork_column: true,
             slot_list_chrome,
+            header_reserve: None,
             bleed: data.bleed,
         };
 
@@ -413,8 +414,8 @@ impl SimilarPage {
             &self.common.slot_list,
             songs,
             &config,
-            SimilarMessage::SlotList(SlotListPageMessage::NavigateUp),
-            SimilarMessage::SlotList(SlotListPageMessage::NavigateDown),
+            SimilarMessage::SlotList(SlotListPageMessage::ScrollUp),
+            SimilarMessage::SlotList(SlotListPageMessage::ScrollDown),
             crate::views::scroll_seek_msg(songs.len(), SimilarMessage::SlotList),
             Some(crate::widgets::slot_list::SlotHoverCallback::for_slot_list(
                 SimilarMessage::SlotList,

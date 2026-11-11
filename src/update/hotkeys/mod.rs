@@ -801,7 +801,7 @@ impl Nokkvi {
                         iced::keyboard::key::Named::Tab | iced::keyboard::key::Named::Backspace
                     )
                 );
-            if !is_escape && !is_tab && !modifiers.control() && !is_shift_nav {
+            if !is_escape && !is_tab && !modifiers.control() && !modifiers.logo() && !is_shift_nav {
                 return Task::none();
             }
         }

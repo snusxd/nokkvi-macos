@@ -188,6 +188,12 @@ impl SettingsService {
     delegate_setter!(set_crossfade_enabled, bool);
     delegate_setter!(set_bit_perfect, BitPerfectMode);
     delegate_setter!(set_font_family, String);
+    delegate_setter!(set_now_playing_sidebar, bool);
+    delegate_setter!(
+        /// Set the nav tabs' order (tab keys, dragged along the bar)
+        set_nav_tab_order,
+        Vec<String>
+    );
     delegate_setter!(
         /// Set the artwork column width fraction (0.05..=0.80)
         set_artwork_column_width_pct,

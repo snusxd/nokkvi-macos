@@ -27,7 +27,7 @@ pub(crate) fn auth_status_row<'a, M: 'a>(
         items.push(
             iced::widget::row![
                 text("Favorited ")
-                    .size(13)
+                    .size(crate::theme::fs(13))
                     .color(theme::fg2())
                     .font(theme::ui_font()),
                 heart
@@ -42,7 +42,7 @@ pub(crate) fn auth_status_row<'a, M: 'a>(
     {
         let mut stars_row = iced::widget::row![
             text("Rated ")
-                .size(13)
+                .size(crate::theme::fs(13))
                 .color(theme::fg2())
                 .font(theme::ui_font())
         ]
@@ -74,7 +74,7 @@ pub(crate) fn auth_status_row<'a, M: 'a>(
         if i > 0 {
             row = row.push(
                 text("•")
-                    .size(13)
+                    .size(crate::theme::fs(13))
                     .font(theme::ui_font())
                     .color(theme::fg3())
                     .boxed(),
@@ -105,7 +105,7 @@ pub(crate) fn play_stats_row<'a, M: 'a>(
     }
     Some(
         text(items.join(" • "))
-            .size(13)
+            .size(crate::theme::fs(13))
             .color(theme::fg2())
             .font(theme::ui_font())
             .boxed(),
@@ -149,7 +149,7 @@ pub(crate) fn tech_specs_row<'a, M: 'a>(
     }
     Some(
         text(specs.join(" • "))
-            .size(12)
+            .size(crate::theme::fs(12))
             .color(theme::fg3())
             .font(theme::ui_font())
             .boxed(),
@@ -169,7 +169,7 @@ pub(crate) fn dot_row<'a, M: 'a>(
     }
     Some(
         text(items.join(" • "))
-            .size(size)
+            .size(crate::theme::fs(size))
             .color(color)
             .font(theme::ui_font())
             .boxed(),

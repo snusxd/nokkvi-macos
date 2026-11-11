@@ -11,10 +11,10 @@ use crate::{
         hotkey_config::{HotkeyAction, HotkeyConfig, KeyCombo},
         player_settings::{
             ArtworkColumnMode, ArtworkCover, ArtworkResolution, ArtworkStretchFit, BitPerfectMode,
-            EnterBehavior, LyricsAlignment, LyricsBackdropBlur, LyricsMode, LyricsWordHighlight,
-            NavDisplayMode, NavLayout, NormalizationLevel, RatingReminderTrigger, RoundedMode,
-            SlotRowHeight, StripClickAction, TheaterControls, TrackArtwork, TrackInfoDisplay,
-            VolumeNormalizationMode,
+            CoverBeatStrength, EnterBehavior, LyricsAlignment, LyricsBackdropBlur, LyricsMode,
+            LyricsWordHighlight, NavDisplayMode, NavLayout, NormalizationLevel,
+            RatingReminderTrigger, RoundedMode, SlotRowHeight, StripClickAction, TheaterControls,
+            TrackArtwork, TrackInfoDisplay, VolumeNormalizationMode,
         },
         queue::{QueueSortPreferences, SortPreferences},
         queue_sort_mode::QueueSortMode,
@@ -382,6 +382,11 @@ impl SettingsManager {
         self.save()
     }
 
+    pub fn set_smooth_trackpad_scroll(&mut self, enabled: bool) -> Result<()> {
+        self.settings.player.smooth_trackpad_scroll = enabled;
+        self.save()
+    }
+
     pub fn set_enter_shuffle(&mut self, enabled: bool) -> Result<()> {
         self.settings.player.enter_shuffle = enabled;
         self.save()
@@ -701,6 +706,30 @@ impl SettingsManager {
         self.save()
     }
 
+    pub fn set_font_size_px(&mut self, px: u32) -> Result<()> {
+        use crate::types::player_settings::{FONT_SIZE_PX_MAX, FONT_SIZE_PX_MIN};
+        self.settings.player.font_size_px = px.clamp(FONT_SIZE_PX_MIN, FONT_SIZE_PX_MAX);
+        self.save()
+    }
+
+    pub fn set_now_playing_sidebar(&mut self, shown: bool) -> Result<()> {
+        self.settings.player.now_playing_sidebar = shown;
+        self.save()
+    }
+
+    pub fn set_nav_tab_order(&mut self, order: Vec<String>) -> Result<()> {
+        self.settings.player.nav_tab_order = order;
+        self.save()
+    }
+
+    pub fn set_font_weight(
+        &mut self,
+        weight: crate::types::player_settings::FontWeight,
+    ) -> Result<()> {
+        self.settings.player.font_weight = weight;
+        self.save()
+    }
+
     pub fn set_mini_player_show_volume(&mut self, enabled: bool) -> Result<()> {
         self.settings.player.mini_player_show_volume = enabled;
         self.save()
@@ -833,6 +862,11 @@ impl SettingsManager {
 
     pub fn set_theater_window_fullscreen(&mut self, enabled: bool) -> Result<()> {
         self.settings.player.theater_window_fullscreen = enabled;
+        self.save()
+    }
+
+    pub fn set_cover_beat_strength(&mut self, beat: CoverBeatStrength) -> Result<()> {
+        self.settings.player.cover_beat_strength = beat;
         self.save()
     }
 
@@ -1255,6 +1289,13 @@ impl SettingsManager {
         self.save()
     }
 
+    pub fn set_lyrics_font_size_px(&mut self, px: u32) -> Result<()> {
+        use crate::types::player_settings::{LYRICS_FONT_SIZE_PX_MAX, LYRICS_FONT_SIZE_PX_MIN};
+        self.settings.player.lyrics_font_size_px =
+            px.clamp(LYRICS_FONT_SIZE_PX_MIN, LYRICS_FONT_SIZE_PX_MAX);
+        self.save()
+    }
+
     pub fn set_lyrics_alignment(&mut self, align: LyricsAlignment) -> Result<()> {
         self.settings.player.lyrics_alignment = align;
         self.save()
@@ -1551,6 +1592,7 @@ mod sentinel_roundtrip_tests {
             // General
             start_view: "Albums".to_string(), // default "Harbour"
             stable_viewport: false,           // default true
+            smooth_trackpad_scroll: false,    // default true
             auto_follow_playing: false,       // default true
             enter_behavior: EnterBehavior::AppendAndPlay, // default PlayAll
             enter_shuffle: true,              // default false
@@ -1569,6 +1611,10 @@ mod sentinel_roundtrip_tests {
             slot_text_links: true,                 // default false
             scrollbar_visibility: crate::types::player_settings::ScrollbarVisibility::Hidden, // default Always
             icon_set: crate::types::player_settings::IconSet::Lucide, // default Phosphor
+            font_size_px: 18,                                         // default 14
+            font_weight: crate::types::player_settings::FontWeight::Bold, // default Regular
+            now_playing_sidebar: true,                                // default false
+            nav_tab_order: vec!["radio".to_string(), "queue".to_string()], // default empty
 
             // Playback / crossfade
             crossfade_enabled: true,                          // default false
@@ -1577,6 +1623,7 @@ mod sentinel_roundtrip_tests {
             lyrics_backdrop_blur: LyricsBackdropBlur::Light,  // default Off
             lyrics_word_highlight: LyricsWordHighlight::Word, // default Sweep
             lyrics_alignment: LyricsAlignment::Right,         // default Center
+            lyrics_font_size_px: 28,                          // default 16
             bit_perfect: BitPerfectMode::Strict,              // default Off
             seek_step_secs: 17,                               // default 5
             crossfade_duration_secs: 9,                       // default 5
@@ -1734,6 +1781,7 @@ mod sentinel_roundtrip_tests {
             artwork_cover: ArtworkCover::HideEverywhere,             // default Show
             theater_controls: TheaterControls::AlwaysHidden,         // default AutoHide
             theater_window_fullscreen: true,                         // default false
+            cover_beat_strength: CoverBeatStrength::Punchy,          // default Subtle
             artwork_column_width_pct: 0.6543,
             artwork_auto_max_pct: 0.5234,
             artwork_vertical_height_pct: 0.6789,
@@ -2886,6 +2934,7 @@ name = "sentinel preset"
         const RESIDUAL_KEYS: &[&str] = &[
             "interface.font_family",
             "interface.artwork_column_width_pct",
+            "interface.nav_tab_order",
             "playback.visualization_mode",
             "playback.sound_effects_enabled",
             "playback.sfx_volume",
@@ -2923,11 +2972,11 @@ name = "sentinel preset"
         assert_eq!(
             registry.len(),
             RESIDUAL_KEYS.len(),
-            "copy-only registries must contain exactly the 8 residual keys"
+            "copy-only registries must contain exactly the 9 residual keys"
         );
     }
 
-    /// M2 behavioral sentinel (Part B): the 8 residual fields survive the
+    /// M2 behavioral sentinel (Part B): the 9 residual fields survive the
     /// FULL orchestrator round-trip, asserted against the SOURCE sentinel
     /// values — NOT pipeline-vs-pipeline (a copy-step deleted from both dump
     /// passes would make ui_ps1 == ui_ps2 vacuously equal; anchoring on the
@@ -2955,6 +3004,11 @@ name = "sentinel preset"
             "artwork_column_width_pct residual: {} vs {}",
             out.artwork_column_width_pct,
             src.artwork_column_width_pct
+        );
+        // nav_tab_order (Vec<String>, Interface).
+        assert_eq!(
+            out.nav_tab_order, src.nav_tab_order,
+            "nav_tab_order residual"
         );
         // 3. visualization_mode (Copy enum, Playback).
         assert_eq!(
@@ -3196,7 +3250,8 @@ mod load_clamp_tests {
             ARTWORK_VERTICAL_HEIGHT_PCT_MIN, AUTOHIDE_TOOLBAR_HEIGHT_MAX,
             AUTOHIDE_TOOLBAR_HEIGHT_MIN, CROSSFADE_DURATION_MAX_SECS, CROSSFADE_DURATION_MIN_SECS,
             CROSSFADE_MIN_TRACK_MAX_SECS, CROSSFADE_MIN_TRACK_MIN_SECS, CROSSFADE_OFFSET_MAX_SECS,
-            CROSSFADE_OFFSET_MIN_SECS, FADE_SKIP_SECS_MAX, FADE_SKIP_SECS_MIN,
+            CROSSFADE_OFFSET_MIN_SECS, FADE_SKIP_SECS_MAX, FADE_SKIP_SECS_MIN, FONT_SIZE_PX_MAX,
+            FONT_SIZE_PX_MIN, LYRICS_FONT_SIZE_PX_MAX, LYRICS_FONT_SIZE_PX_MIN,
             RATING_REMINDER_PERCENT_MAX, RATING_REMINDER_PERCENT_MIN, REPLAY_GAIN_DB_MAX,
             REPLAY_GAIN_DB_MIN, SCROBBLE_THRESHOLD_MAX, SCROBBLE_THRESHOLD_MIN, SEEK_STEP_MAX_SECS,
             SEEK_STEP_MIN_SECS, SFX_VOLUME_MAX, SFX_VOLUME_MIN, TRANSPORT_FADE_MS_MAX,
@@ -3256,6 +3311,16 @@ mod load_clamp_tests {
                 "crossfade_offset_secs",
                 CROSSFADE_OFFSET_MIN_SECS.into(),
                 CROSSFADE_OFFSET_MAX_SECS.into(),
+            ),
+            (
+                "lyrics_font_size_px",
+                LYRICS_FONT_SIZE_PX_MIN.into(),
+                LYRICS_FONT_SIZE_PX_MAX.into(),
+            ),
+            (
+                "font_size_px",
+                FONT_SIZE_PX_MIN.into(),
+                FONT_SIZE_PX_MAX.into(),
             ),
             (
                 "autohide_toolbar_height",
