@@ -4,7 +4,7 @@
 //! Uses `HotkeyConfig` for configurable bindings instead of hardcoded match arms.
 
 use iced::keyboard;
-use nokkvi_data::types::hotkey_config::{HotkeyAction, HotkeyConfig, KeyCode};
+use nokkvi_data::types::hotkey_config::{HotkeyAction, HotkeyConfig, KeyCode, KeyCombo};
 
 use crate::{
     Message, View,
@@ -16,20 +16,15 @@ use crate::{
 /// Convert an iced keyboard key to our `KeyCode` enum.
 /// Returns `None` for keys we don't support binding to.
 ///
-/// Normalises shifted characters back to their base key (e.g. `$` → `4`)
-/// so that bindings stored as `Shift + 4` match the actual key event
-/// that Iced reports as `Key::Character("$")` with `modifiers.shift()`.
+/// By the time a live press gets here, the keyboard subscription has already
+/// rewritten a character the active layout can't bind (a Cyrillic letter, an
+/// AZERTY digit-row symbol) to the US-QWERTY character at that position
+/// (`super::layout_independent_key`), so bindings work on every layout.
 ///
-/// # Keyboard layout assumption
-///
-/// Assumes a **US QWERTY** layout. The shifted-symbol → base-key table
-/// below (`!` → `1`, `@` → `2`, `#` → `3`, etc.) is the US-shift map;
-/// other layouts (AZERTY, Dvorak, German QWERTZ, etc.) produce different
-/// shifted characters for the same physical keys, and bindings registered
-/// against US base keys will not normalise correctly. This is a known
-/// limitation — Iced does not currently expose hardware scancodes that
-/// would let us key off the physical position rather than the produced
-/// character.
+/// Also normalises shifted characters back to their base key (e.g. `$` →
+/// `4`) so that bindings stored as `Shift + 4` match. iced already reports
+/// the key without modifiers, so this is a fallback for an event that still
+/// carries the shifted symbol; the table is the US shift map.
 pub(crate) fn iced_key_to_keycode(key: &keyboard::Key) -> Option<KeyCode> {
     use keyboard::key;
     match key {
@@ -276,35 +271,39 @@ pub(crate) fn handle_hotkey(
 /// `Message`; the raw-key handler also reads the action itself (Theater Mode's
 /// key policy classifies actions, not messages). `unnamed` is the Linux code of
 /// a key iced has no name for ([`key_press_to_keycode`]).
+///
+/// The logo modifier (Cmd on macOS, Super elsewhere) is part of the combo, so
+/// ⌘L and a bare L are different bindings and ⌘C never fires a bare `c`
+/// binding. The combos the OS owns (⌘C/V/X/A/Z, ⌘Q, ⌘W, … on macOS) never
+/// resolve (`KeyCombo::is_os_reserved`). Cmd+, opens Settings, the macOS
+/// convention, unless the user bound that combo to something else.
 pub(crate) fn resolve_action(
     key: &keyboard::Key,
     unnamed: Option<u32>,
     modifiers: keyboard::Modifiers,
     config: &HotkeyConfig,
 ) -> Option<HotkeyAction> {
-    let keycode = key_press_to_keycode(key, unnamed)?;
-    if modifiers.logo() {
-        if keycode == KeyCode::Char(',')
-            && !modifiers.shift()
-            && !modifiers.control()
-            && !modifiers.alt()
-        {
-            return Some(HotkeyAction::SwitchToSettings);
-        }
-        return None;
+    let combo = key_combo(key_press_to_keycode(key, unnamed)?, modifiers);
+    config.lookup_combo(&combo).or_else(|| {
+        (combo == KeyCombo::logo(KeyCode::Char(','))).then_some(HotkeyAction::SwitchToSettings)
+    })
+}
+
+/// The binding a key press is: its `KeyCode` plus the four modifiers. The
+/// one constructor shared by dispatch ([`resolve_action`]) and the settings
+/// capture, so a captured combo is exactly what the key later looks up.
+pub(crate) fn key_combo(key: KeyCode, modifiers: keyboard::Modifiers) -> KeyCombo {
+    KeyCombo {
+        key,
+        shift: modifiers.shift(),
+        ctrl: modifiers.control(),
+        alt: modifiers.alt(),
+        logo: modifiers.logo(),
     }
-    config.lookup(
-        &keycode,
-        modifiers.shift(),
-        modifiers.control(),
-        modifiers.alt(),
-    )
 }
 
 #[cfg(test)]
 mod tests {
-    use nokkvi_data::types::hotkey_config::KeyCombo;
-
     use super::*;
 
     #[test]
@@ -364,7 +363,9 @@ mod tests {
     #[test]
     fn test_shuffle_play_hotkey() {
         let config = HotkeyConfig::default();
-        let action = config.lookup(&KeyCode::Enter, false, true, false).unwrap();
+        let action = config
+            .lookup_combo(&KeyCombo::primary(KeyCode::Enter))
+            .unwrap();
         assert_eq!(action, HotkeyAction::ShufflePlay);
 
         let msg = action_to_message(action);
@@ -691,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn cmd_comma_opens_settings_and_other_cmd_shortcuts_are_ignored() {
+    fn cmd_comma_opens_settings_and_cmd_never_fires_a_bare_binding() {
         let config = HotkeyConfig::default();
         let msg = handle_hotkey(
             keyboard::Key::Character(",".into()),
@@ -703,12 +704,104 @@ mod tests {
             "Cmd+, should toggle Settings"
         );
 
-        // Cmd+C must not trigger a bare 'c' binding.
-        let cmd_c = handle_hotkey(
+        // Cmd+X must not trigger the bare 'x' binding (Toggle Random).
+        let cmd_x = handle_hotkey(
+            keyboard::Key::Character("x".into()),
+            keyboard::Modifiers::LOGO,
+            &config,
+        );
+        assert!(cmd_x.is_none(), "Cmd+X must not fire a hotkey");
+    }
+
+    #[test]
+    fn a_cmd_binding_fires_on_cmd_and_a_rebound_cmd_comma_wins() {
+        let mut config = HotkeyConfig::default();
+        config.set_binding(HotkeyAction::ToggleStar, KeyCombo::logo(KeyCode::Char('j')));
+        config.set_binding(HotkeyAction::GetInfo, KeyCombo::logo(KeyCode::Char(',')));
+        assert!(matches!(
+            handle_hotkey(
+                keyboard::Key::Character("j".into()),
+                keyboard::Modifiers::LOGO,
+                &config,
+            ),
+            Some(Message::Hotkey(HotkeyMessage::ToggleStar))
+        ));
+        assert!(matches!(
+            handle_hotkey(
+                keyboard::Key::Character(",".into()),
+                keyboard::Modifiers::LOGO,
+                &config,
+            ),
+            Some(Message::Hotkey(HotkeyMessage::GetInfo))
+        ));
+    }
+
+    #[test]
+    fn the_shortcut_defaults_fire_on_the_platform_primary_modifier() {
+        let config = HotkeyConfig::default();
+        assert!(matches!(
+            handle_hotkey(
+                keyboard::Key::Character("e".into()),
+                keyboard::Modifiers::COMMAND,
+                &config,
+            ),
+            Some(Message::SplitView(SplitViewMessage::ToggleBrowsingPanel))
+        ));
+    }
+
+    #[test]
+    fn a_system_cmd_chord_never_resolves_on_macos() {
+        let mut config = HotkeyConfig::default();
+        config.set_binding(HotkeyAction::ToggleStar, KeyCombo::logo(KeyCode::Char('c')));
+        let msg = handle_hotkey(
             keyboard::Key::Character("c".into()),
             keyboard::Modifiers::LOGO,
             &config,
         );
-        assert!(cmd_c.is_none(), "Cmd+C must not fire a hotkey");
+        assert_eq!(
+            msg.is_none(),
+            cfg!(target_os = "macos"),
+            "Cmd+C is the system's Copy on macOS and a plain Super chord elsewhere"
+        );
+    }
+
+    #[test]
+    fn a_letter_typed_on_a_cyrillic_layout_fires_its_binding() {
+        use keyboard::key::{Code, Physical};
+        let config = HotkeyConfig::default();
+        // Russian layout: the X key types "ч", Shift+L types "Д" (iced drops
+        // Shift from the key), the "/" key types ".".
+        let ru = |typed: &str, code: Code| {
+            crate::hotkeys::layout_independent_key(
+                keyboard::Key::Character(typed.into()),
+                &Physical::Code(code),
+            )
+        };
+        assert!(matches!(
+            handle_hotkey(ru("ч", Code::KeyX), keyboard::Modifiers::default(), &config),
+            Some(Message::Playback(PlaybackMessage::ToggleRandom))
+        ));
+        assert!(matches!(
+            handle_hotkey(ru("д", Code::KeyL), keyboard::Modifiers::SHIFT, &config),
+            Some(Message::Hotkey(HotkeyMessage::ToggleStar))
+        ));
+        assert!(matches!(
+            handle_hotkey(
+                ru(".", Code::Slash),
+                keyboard::Modifiers::default(),
+                &config
+            ),
+            Some(Message::Hotkey(HotkeyMessage::FocusSearch))
+        ));
+        // Back on a Latin layout, "/" is "/" again.
+        let _ = ru("s", Code::KeyS);
+        assert!(matches!(
+            handle_hotkey(
+                ru("/", Code::Slash),
+                keyboard::Modifiers::default(),
+                &config
+            ),
+            Some(Message::Hotkey(HotkeyMessage::FocusSearch))
+        ));
     }
 }

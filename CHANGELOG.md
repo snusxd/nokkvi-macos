@@ -10,12 +10,19 @@ All notable changes to this project will be documented in this file.
 - Cover Beat follows the kick drum only, not snares or hi-hats.
 - In Theater Mode the Cover Beat cover grows past its edges; in the Queue and Radios it zooms within its frame.
 - Settings → Interface → Artwork Column → Cover Beat Strength picks Subtle or Punchy.
+- On macOS, hotkeys can use Cmd, and Settings → Hotkeys shows modifiers as ⌃⌥⇧⌘ symbols.
+- On macOS, Settings refuses system shortcuts such as ⌘Q, ⌘C or ⌘Tab as hotkeys.
 
 ### Changed
 
 - The macOS app icon now sits on a dark graphite plate, with neutral greys in place of the teal tint.
+- On macOS, the hotkeys that defaulted to Ctrl, like Shuffle Play and Roulette, now default to Cmd.
+- On macOS, Cmd+click replaces Ctrl+click for selecting several rows.
 
 ### Fixed
+
+- Letter and punctuation hotkeys now work on non-Latin keyboard layouts such as Russian.
+- Number-row hotkeys now work on layouts like AZERTY, where that row types symbols without Shift.
 
 ### Removed
 
