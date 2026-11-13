@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - Settings → Interface → Artwork Column → Cover Beat Strength picks Subtle or Punchy.
 - On macOS, hotkeys can use Cmd, and Settings → Hotkeys shows modifiers as ⌃⌥⇧⌘ symbols.
 - On macOS, Settings refuses system shortcuts such as ⌘Q, ⌘C or ⌘Tab as hotkeys.
+- Settings → Playback → Discord → Discord App ID shows what you're listening to on your Discord profile.
+- The Discord status shows the album cover when your Navidrome is reachable from the internet, else the app's icon.
 
 ### Changed
 

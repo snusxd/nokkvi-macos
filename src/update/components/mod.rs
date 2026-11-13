@@ -1878,6 +1878,8 @@ impl Nokkvi {
             tray_connection: _,
             tray_window_hidden: _,
             main_window_id: _,
+            // The worker ends (and clears the activity) via `stop()` below.
+            discord: _,
             // ---- Kept: they follow the now-playing track, which the next
             // session's first update replaces ----
             active_playback: _,
@@ -1892,6 +1894,7 @@ impl Nokkvi {
             // ---- Kept: the session-expired toast must outlive this reset ----
             toast: _,
         } = self;
+        self.discord.stop();
 
         // Theater Mode never survives to the Login screen (logout or session
         // expiry); its layout must not greet the next login.

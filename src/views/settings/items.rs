@@ -698,7 +698,8 @@ mod tests {
                 "Scrobbling",
                 "Radio Scrobbling",
                 "Rating Reminder",
-                "Playlists"
+                "Playlists",
+                "Discord"
             ],
             "Playback tab section headers diverge",
         );
@@ -749,6 +750,7 @@ mod tests {
                 "general.quick_add_to_playlist",
                 "general.default_playlist_name",
                 "general.queue_show_default_playlist",
+                "general.discord_app_id",
             ],
             "Playback tab Off-mode item keys diverge (order matters)",
         );
