@@ -4,6 +4,7 @@
 //! harbour_expandable_shelves, library_page_size,
 //! suppress_library_refresh_toasts, artwork_resolution, track_artwork,
 //! show_album_artists_only, similar_artists_online, similar_artists_deezer,
+//! group_artist_albums,
 //! local_music_path, verbose_config), Mouse Behavior (stable_viewport,
 //! auto_follow_playing), System Tray (show_tray_icon, close_to_tray), and the
 //! Theme-tab `light_mode` toggle (its persistence is config-file-only — the
@@ -357,6 +358,25 @@ define_settings! {
                 ),
                 default: true,
                 read_field: |d| d.similar_artists_deezer,
+            },
+        },
+        GroupArtistAlbums {
+            key: "general.group_artist_albums",
+            value_type: Bool,
+            setter: |mgr, v: bool| mgr.set_group_artist_albums(v),
+            toml_apply: |ts, p| p.group_artist_albums = ts.group_artist_albums,
+            read: |src, out| out.group_artist_albums = src.group_artist_albums,
+            write: |ps, ts| ts.group_artist_albums = ps.group_artist_albums,
+            ui_meta: {
+                label: "Group Artist Albums by Release Type",
+                category: "Application",
+                subtitle: Some(
+                    "On: an expanded artist's albums sit under headers (Albums, EPs, Singles, \
+                     Live, Compilations, Appears On and more) that play or fold their \
+                     section · Off: one list, newest first",
+                ),
+                default: true,
+                read_field: |d| d.group_artist_albums,
             },
         },
         ArtworkResolutionKey {
@@ -854,6 +874,7 @@ mod tests {
             show_album_artists_only: true,
             similar_artists_online: true,
             similar_artists_deezer: true,
+            group_artist_albums: true,
             suppress_library_refresh_toasts: false,
             show_tray_icon: false,
             close_to_tray: false,
@@ -988,6 +1009,7 @@ mod tests {
             show_album_artists_only: live.show_album_artists_only,
             similar_artists_online: live.similar_artists_online,
             similar_artists_deezer: live.similar_artists_deezer,
+            group_artist_albums: live.group_artist_albums,
             suppress_library_refresh_toasts: live.suppress_library_refresh_toasts,
             show_tray_icon: live.show_tray_icon,
             close_to_tray: live.close_to_tray,

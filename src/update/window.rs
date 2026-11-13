@@ -234,7 +234,8 @@ impl Nokkvi {
     /// a per-slot large-artwork concept (Genres/Playlists drive their
     /// collage panel through a separate `LoadArtwork` action that
     /// `prefetch_viewport_artwork` re-synthesizes via `SetOffset`), when
-    /// the centered item's artwork is already cached, or when there is no
+    /// the centered item's artwork is already cached (the Albums and Artists
+    /// arms still start their info settle timer then), or when there is no
     /// active session.
     pub(crate) fn center_large_artwork_load_task(&mut self, view: View) -> Option<Task<Message>> {
         self.app_service.as_ref()?;
@@ -243,12 +244,17 @@ impl Nokkvi {
         match view {
             View::Albums => {
                 let album_id = self.centred_album_id()?;
+                // The panel's notes follow the centre too. A roulette spin
+                // asks about none of the albums it sweeps past
+                // (`album_notes_wanted`).
+                let info = self.album_info_settle_task(album_id.clone());
                 if self.artwork.large_artwork.peek(&album_id).is_some() {
-                    return None;
+                    return Some(info);
                 }
-                Some(Task::done(Message::Artwork(ArtworkMessage::LoadLarge(
-                    album_id,
-                ))))
+                Some(Task::batch([
+                    Task::done(Message::Artwork(ArtworkMessage::LoadLarge(album_id))),
+                    info,
+                ]))
             }
             View::Songs => {
                 let total = self.library.songs.len();
@@ -284,15 +290,9 @@ impl Nokkvi {
             }
             View::Artists => {
                 let artist_id = self.centred_artist_id()?;
-                // A roulette spin sweeps past dozens of artists; asking the
-                // server about each would run its agents for every one. The
-                // spin plays its pick, and the next centring asks.
-                if self.roulette.is_some() {
-                    if self.artwork.large_artwork.peek(&artist_id).is_some() {
-                        return None;
-                    }
-                    return Some(self.handle_load_artist_large_artwork(artist_id));
-                }
+                // The art, and the info settle. A roulette spin asks about
+                // none of the artists it sweeps past (`artist_info_wanted`):
+                // it plays its pick, and the next centring asks.
                 Some(self.artist_center_tasks(artist_id))
             }
             // Shared with the `RadiosAction::None` browse arm so both center-load

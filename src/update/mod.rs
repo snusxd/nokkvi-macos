@@ -127,11 +127,20 @@ impl Nokkvi {
         // layout would show (the view, the split view, the editor) leaves
         // theater, so no mouse or async route changes the view invisibly.
         let theater_route = self.theater.active.then(|| self.theater_route_snapshot());
+        let centred_asks = self.centred_asks_wanted();
         let mut task = self.dispatch_message(message);
         if self.theater.active
             && theater_route.is_some_and(|before| before != self.theater_route_snapshot())
         {
             task = Task::batch([task, self.exit_theater()]);
+        }
+        // The server is asked about a centred album or artist only while
+        // someone is looking at it. Whatever brought it back (a view or tab
+        // switch, the split view opening, Theater Mode ending, a spin or a
+        // find chain finishing) is caught here, once, so no route has to
+        // remember to centre the row again.
+        if let Some(asks) = self.newly_wanted_asks_task(centred_asks) {
+            task = Task::batch([task, asks]);
         }
         // The drag mappers, the scrollbar thumb, the centered-row reads, and
         // find-and-expand read the stored slot_count between renders, so it
@@ -231,12 +240,21 @@ impl Nokkvi {
                         // Derive the smart-playlist capability set from the
                         // same post-auth fetch (all-false on unparseable —
                         // conservative: feature-hidden).
-                        self.rules_editor.caps_state = crate::state::CapsState::Fetched(
-                            nokkvi_data::types::smart_criteria::ServerCaps::from_version_str(
-                                version,
-                            ),
+                        let caps = nokkvi_data::types::smart_criteria::ServerCaps::from_version_str(
+                            version,
                         );
+                        self.rules_editor.caps_state = crate::state::CapsState::Fetched(caps);
                         self.server_version = ver;
+                        // Playlist hearts, stars and their two sorts follow
+                        // the server (Navidrome 0.64+). A Favorited or
+                        // Rating sort kept from a newer server goes back to
+                        // Name, and the list loaded under it is reloaded.
+                        if self
+                            .playlists_page
+                            .set_annotations(caps.playlist_annotations)
+                        {
+                            return self.handle_load_playlists();
+                        }
                     }
                     None => {
                         // A transient failure must not silently hide the

@@ -98,7 +98,11 @@ fn album_starred_propagates_to_artists_expansion() {
 
     let _ = app.handle_album_starred_status_updated("a1".to_string(), true);
     assert!(
-        app.artists_page.expansion.children[0].is_starred,
+        app.artists_page
+            .expanded_albums()
+            .next()
+            .unwrap()
+            .is_starred,
         "artists expansion album should be starred"
     );
 }
@@ -289,13 +293,11 @@ fn starred_flag_message_routes_each_kind_to_its_flag_handler() {
         ),
         "got {msg:?}"
     );
-    // Playlist starring isn't surfaced yet: it rides the song flag handler,
-    // which only touches matching ids.
     let msg = crate::Nokkvi::starred_flag_message("pl1".to_string(), ItemKind::Playlist, true);
     assert!(
         matches!(
             msg,
-            Message::Hotkey(HotkeyMessage::SongStarredStatusUpdated(ref id, true))
+            Message::Hotkey(HotkeyMessage::PlaylistStarredStatusUpdated(ref id, true))
             if id == "pl1"
         ),
         "got {msg:?}"
@@ -318,7 +320,6 @@ fn star_result_message_sends_only_a_songs_confirmed_love_to_the_rating() {
         (ItemKind::Song, false),
         (ItemKind::Album, true),
         (ItemKind::Artist, true),
-        (ItemKind::Playlist, true),
     ] {
         let msg = crate::Nokkvi::star_result_message(Ok(()), "x".into(), kind, star);
         assert!(
@@ -403,7 +404,7 @@ fn rating_revert_message_routes_song_to_song_handler() {
 }
 
 #[test]
-fn rating_revert_message_routes_playlist_through_song_handler_for_now() {
+fn rating_revert_message_routes_playlist_to_its_own_handler() {
     use nokkvi_data::types::ItemKind;
 
     use crate::app_message::{HotkeyMessage, Message};
@@ -411,10 +412,10 @@ fn rating_revert_message_routes_playlist_through_song_handler_for_now() {
     assert!(
         matches!(
             msg,
-            Message::Hotkey(HotkeyMessage::SongRatingUpdated(ref id, 2))
+            Message::Hotkey(HotkeyMessage::PlaylistRatingUpdated(ref id, 2))
             if id == "pl1"
         ),
-        "Playlist kind must collapse into SongRatingUpdated until playlist rating ships"
+        "got {msg:?}"
     );
 }
 
@@ -446,13 +447,17 @@ fn confirmed_star_refreshes_the_starred_kind() {
             ..Default::default()
         }
     );
+    // A playlist's goes to its own handler, which reloads only under a
+    // sort the star can reorder (`playlist_favourites.rs`).
     let msg = crate::Nokkvi::star_result_message(Ok(()), "p1".into(), ItemKind::Playlist, false);
-    assert_eq!(
-        library_change_of(msg),
-        LibraryChange {
-            playlist_ids: vec!["p1".into()],
-            ..Default::default()
-        }
+    assert!(
+        matches!(
+            msg,
+            crate::app_message::Message::Hotkey(
+                crate::app_message::HotkeyMessage::PlaylistAnnotated(ref id)
+            ) if id == "p1"
+        ),
+        "got {msg:?}"
     );
 }
 

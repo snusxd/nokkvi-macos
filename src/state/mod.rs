@@ -38,6 +38,7 @@
 //! exists for the same reason — `#[derive(Default)]` cannot express
 //! `NonZeroUsize` capacities at compile time.
 
+mod album_info;
 mod artist_info;
 mod artist_recs;
 mod artwork;
@@ -69,10 +70,12 @@ mod trawl;
 mod waveform;
 mod window;
 
+pub(crate) use album_info::*;
 pub(crate) use artist_info::*;
 pub(crate) use artist_recs::*;
 pub(crate) use artwork::*;
 pub(crate) use audio::*;
+pub(crate) use centred_fetch::CENTRE_SETTLE;
 pub(crate) use cover_beat::*;
 pub(crate) use discord::DiscordState;
 pub(crate) use dynamic_accent::*;

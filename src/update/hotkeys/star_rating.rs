@@ -4,7 +4,11 @@ use iced::Task;
 use nokkvi_data::types::ItemKind;
 use tracing::{debug, error};
 
-use crate::{Nokkvi, View, app_message::Message, views::expansion::SlotListEntry};
+use crate::{
+    Nokkvi, View,
+    app_message::Message,
+    views::{DiscographyRow, expansion::SlotListEntry},
+};
 
 /// Run `$body` once against every in-memory collection that can hold the
 /// affected song, binding `$items` to the collection's mutable slice and
@@ -66,10 +70,12 @@ pub(in crate::update) struct CenterItemInfo {
 /// the star and rating keys, the IPC `selection` record and the IPC
 /// `add-to-queue` reply.
 pub(in crate::update) enum CenterItem {
-    /// A song, album or artist: the star and rating keys act on it.
+    /// A song, album, artist or (Navidrome 0.64+) playlist: the star and
+    /// rating keys act on it.
     Rateable(CenterItemInfo),
-    /// A row Shift+A enqueues that nothing stars or rates: a playlist or
-    /// genre parent, a Harbour item or Random row.
+    /// A row Shift+A enqueues that nothing stars or rates: a genre parent,
+    /// a playlist on a server that doesn't star them, a Harbour item or
+    /// Random row.
     Named(String),
 }
 
@@ -176,9 +182,9 @@ impl Nokkvi {
                 .artists_page
                 .expansion
                 .resolve_center(&self.library.artists, &self.artists_page.common, |a| &a.id)
-                .map(|entry| {
-                    CenterItem::Rateable(match entry {
-                        SlotListEntry::Child(album, _) => CenterItemInfo {
+                .map(|entry| match entry {
+                    SlotListEntry::Child(DiscographyRow::Album(album), _) => {
+                        CenterItem::Rateable(CenterItemInfo {
                             id: album.id.clone(),
                             name: album.name.clone(),
                             artist: album.artist.clone(),
@@ -186,17 +192,22 @@ impl Nokkvi {
                             starred: album.is_starred,
                             rating: album.rating.unwrap_or(0),
                             kind: ItemKind::Album,
-                        },
-                        SlotListEntry::Parent(artist) => CenterItemInfo {
-                            id: artist.id.clone(),
-                            name: artist.name.clone(),
-                            artist: String::new(),
-                            artist_id: None,
-                            starred: artist.is_starred,
-                            rating: artist.rating.unwrap_or(0),
-                            kind: ItemKind::Artist,
-                        },
-                    })
+                        })
+                    }
+                    // A release-type section header: Shift+A enqueues its
+                    // albums, nothing stars or rates it.
+                    SlotListEntry::Child(DiscographyRow::Section(header), _) => {
+                        CenterItem::Named(header.group.label().to_string())
+                    }
+                    SlotListEntry::Parent(artist) => CenterItem::Rateable(CenterItemInfo {
+                        id: artist.id.clone(),
+                        name: artist.name.clone(),
+                        artist: String::new(),
+                        artist_id: None,
+                        starred: artist.is_starred,
+                        rating: artist.rating.unwrap_or(0),
+                        kind: ItemKind::Artist,
+                    }),
                 }),
             View::Playlists => self
                 .playlists_page
@@ -214,7 +225,20 @@ impl Nokkvi {
                         rating: song.rating.unwrap_or(0),
                         kind: ItemKind::Song,
                     }),
-                    // Playlists themselves can't be starred or rated.
+                    // A playlist is starred and rated where the server
+                    // does that (Navidrome 0.64+); elsewhere the row is
+                    // only named, and the keys find nothing on it.
+                    SlotListEntry::Parent(playlist) if self.playlists_page.annotations => {
+                        CenterItem::Rateable(CenterItemInfo {
+                            id: playlist.id.clone(),
+                            name: playlist.name.clone(),
+                            artist: String::new(),
+                            artist_id: None,
+                            starred: playlist.is_starred,
+                            rating: playlist.rating.unwrap_or(0),
+                            kind: ItemKind::Playlist,
+                        })
+                    }
                     SlotListEntry::Parent(playlist) => CenterItem::Named(playlist.name.clone()),
                 }),
             View::Genres => self
@@ -281,7 +305,7 @@ impl Nokkvi {
                     info.artist_id.unwrap_or_default(),
                     info.artist,
                 )),
-                // No list centres a playlist as a rateable row.
+                // A playlist names no artist.
                 ItemKind::Playlist => None,
             },
             CenterItem::Named(_) => None,
@@ -453,9 +477,7 @@ impl Nokkvi {
         // Update expanded child albums in artists/genres views
         if let Some(album) = self
             .artists_page
-            .expansion
-            .children
-            .iter_mut()
+            .expanded_albums_mut()
             .find(|a| a.id == album_id)
         {
             album.is_starred = new_starred_status;
@@ -486,6 +508,24 @@ impl Nokkvi {
             &artist_id,
             new_starred_status,
             "artists",
+        );
+        Task::none()
+    }
+
+    pub(crate) fn handle_playlist_starred_status_updated(
+        &mut self,
+        playlist_id: String,
+        new_starred_status: bool,
+    ) -> Task<Message> {
+        debug!(
+            "🔄 Updating starred status for playlist {} to {}",
+            playlist_id, new_starred_status
+        );
+        nokkvi_data::backend::update_starred_in_list(
+            &mut self.library.playlists,
+            &playlist_id,
+            new_starred_status,
+            "playlists",
         );
         Task::none()
     }
@@ -619,9 +659,7 @@ impl Nokkvi {
         // Update expanded child albums in artists/genres views
         if let Some(album) = self
             .artists_page
-            .expansion
-            .children
-            .iter_mut()
+            .expanded_albums_mut()
             .find(|a| a.id == album_id)
         {
             album.rating = rating_opt;
@@ -660,5 +698,50 @@ impl Nokkvi {
             "artist",
         );
         Task::none()
+    }
+
+    /// Update playlist rating in local state: the user's own change, or the
+    /// restore after the server refused it.
+    pub(crate) fn handle_playlist_rating_updated(
+        &mut self,
+        playlist_id: String,
+        new_rating: u32,
+    ) -> Task<Message> {
+        debug!(
+            "🔄 Updating rating for playlist {} to {}",
+            playlist_id, new_rating
+        );
+        let rating_opt = if new_rating == 0 {
+            None
+        } else {
+            Some(new_rating)
+        };
+        nokkvi_data::backend::update_rating_in_list(
+            &mut self.library.playlists,
+            &playlist_id,
+            rating_opt,
+            "playlist",
+        );
+        Task::none()
+    }
+
+    /// The server took nokkvi's own star or rating on a playlist. The row
+    /// already shows it (the optimistic update), so the list reloads only
+    /// under the two sorts it can reorder, Favorited and Rating, as an
+    /// album's does. Under any other sort a reload brings nothing new, and
+    /// under Updated At it reshuffles the rows: the server re-evaluates
+    /// smart playlists as the list is read, which stamps them updated, and
+    /// the row just rated slid out from under the pointer.
+    pub(crate) fn handle_playlist_annotated(&mut self, playlist_id: &str) -> Task<Message> {
+        use crate::widgets::view_header::SortMode;
+        let reorders = matches!(
+            self.playlists_page.common.current_sort_mode,
+            SortMode::Favorited | SortMode::Rating
+        );
+        if !reorders || self.library.playlists.is_empty() {
+            debug!("⭐ Playlist {playlist_id} annotated: no reload under this sort");
+            return Task::none();
+        }
+        self.reload_playlists_in_background()
     }
 }

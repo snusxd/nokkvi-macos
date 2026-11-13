@@ -11,10 +11,16 @@ use iced::{
 };
 use nokkvi_data::{
     backend::{albums::AlbumUIViewData, artists::ArtistUIViewData},
-    types::artist_recs::ArtistRec,
+    types::{
+        artist_recs::ArtistRec,
+        discography::{DiscographyGroup, RowTagKind, row_tags},
+    },
 };
 
-use super::{super::expansion::SlotListEntry, ArtistsMessage, ArtistsPage, ArtistsViewData};
+use super::{
+    super::expansion::SlotListEntry, ArtistsMessage, ArtistsPage, ArtistsViewData, DiscographyRow,
+    SectionHeader, discography,
+};
 use crate::widgets::{
     self,
     context_menu::LibraryContextEntry,
@@ -32,6 +38,17 @@ impl ArtistsPage {
     /// Right-click entries for an expanded album row (see [`Self::parent_menu`]).
     pub(crate) fn child_menu() -> Vec<LibraryContextEntry> {
         crate::widgets::context_menu::library_entries_with_folder()
+    }
+
+    /// Right-click entries for a release-type section header: the batch
+    /// actions, which take the section's albums (see [`Self::parent_menu`]).
+    pub(crate) fn section_menu() -> Vec<LibraryContextEntry> {
+        vec![
+            LibraryContextEntry::ShufflePlay,
+            LibraryContextEntry::AddToQueue,
+            LibraryContextEntry::AddToPlaylist,
+            LibraryContextEntry::AddToMix,
+        ]
     }
 
     /// Build the view
@@ -208,14 +225,25 @@ impl ArtistsPage {
                         row,
                     )
                 }
-                SlotListEntry::Child(album, _parent_artist_id) => {
-                    let sub_index_label =
-                        self.expansion
-                            .child_sub_index_label(ctx.item_index, artists, |a| &a.id);
+                SlotListEntry::Child(DiscographyRow::Section(header), _parent_artist_id) => {
+                    let row = Self::render_section_header_row(
+                        header,
+                        &ctx,
+                        data.stable_viewport,
+                        open_menu_for_rows,
+                    );
+                    crate::widgets::slot_list::wrap_with_select_column_for(
+                        select_header_visible,
+                        &ctx,
+                        ArtistsMessage::SlotList,
+                        row,
+                    )
+                }
+                SlotListEntry::Child(DiscographyRow::Album(album), _parent_artist_id) => {
                     let row = self.render_album_child_row(
                         album,
+                        artists,
                         &ctx,
-                        &sub_index_label,
                         crate::views::RowCovers {
                             minis: data.album_art,
                             placeholders,
@@ -262,7 +290,7 @@ impl ArtistsPage {
         let pill_content = centered_artist
             .filter(|_| crate::theme::artists_artwork_overlay())
             .map(|artist| {
-                use iced::widget::{button, column, text};
+                use iced::widget::{column, text};
 
                 use crate::theme;
 
@@ -315,59 +343,11 @@ impl ArtistsPage {
                 // getArtistInfo2 answer first, the native row otherwise.
                 let (bio, link) = pill_bio_and_link(artist, data.artist_info.get(&artist.id));
                 if let Some(bio) = bio {
-                    let bio_preview: String = bio.chars().take(350).collect();
-                    let bio_preview = if bio.chars().count() > 350 {
-                        format!("{}...", bio_preview.trim_end())
-                    } else {
-                        bio_preview
-                    };
-
-                    let mut bio_col = column![
-                        text(bio_preview)
-                            .size(crate::theme::fs(13))
-                            .color(theme::fg1())
-                            .font(theme::ui_font())
-                            .center()
-                    ]
-                    .spacing(4)
-                    .align_x(iced::Alignment::Center);
-
-                    if let Some(url) = link {
-                        let read_more_btn = button(
-                            text(bio_link_label(url))
-                                .size(crate::theme::fs(11))
-                                .color(theme::accent_bright())
-                                .font(theme::weighted_ui_font(iced::font::Weight::Bold)),
-                        )
-                        .on_press(ArtistsMessage::OpenExternalUrl(url.to_string()))
-                        .padding(iced::Padding {
-                            top: 2.0,
-                            bottom: 2.0,
-                            left: 6.0,
-                            right: 6.0,
-                        })
-                        .style(|_theme, status| {
-                            let opacity = match status {
-                                iced::widget::button::Status::Hovered
-                                | iced::widget::button::Status::Pressed => 0.75,
-                                _ => 1.0,
-                            };
-                            let mut color = theme::accent_bright();
-                            color.a = opacity;
-                            iced::widget::button::Style {
-                                background: None,
-                                border: iced::Border {
-                                    width: 0.0,
-                                    ..Default::default()
-                                },
-                                text_color: color,
-                                ..Default::default()
-                            }
-                        });
-                        bio_col = bio_col.push(read_more_btn.boxed());
-                    }
-
-                    col = col.push(bio_col.boxed());
+                    col = col.push(crate::widgets::metadata_pill::agent_text_block(
+                        bio,
+                        link,
+                        ArtistsMessage::OpenExternalUrl,
+                    ));
                 }
 
                 // Similar artists (ListenBrainz, Deezer) under the biography, once
@@ -640,32 +620,235 @@ impl ArtistsPage {
         )
     }
 
+    /// The dotted sub-index of the album row at flattened `flat_index`, e.g.
+    /// `"236.3"`: the expanded artist's number, then the album's place among
+    /// the artist's albums. Section headers take no number, and a folded
+    /// section's albums keep theirs.
+    pub(crate) fn album_sub_index_label(
+        &self,
+        flat_index: usize,
+        artists: &[ArtistUIViewData],
+    ) -> String {
+        // For a child row this is also its index in `expansion.children`.
+        let child_idx = self
+            .expansion
+            .count_children_before(flat_index, artists, |a| &a.id);
+        let artist_number = flat_index.saturating_sub(child_idx);
+        let album_number = discography::album_ordinal(&self.expansion.children, child_idx);
+        format!("{artist_number}.{album_number}")
+    }
+
+    /// The release-type section the album row at flattened `flat_index`
+    /// sits in; `None` in a flat list (no headers).
+    pub(crate) fn album_section(
+        &self,
+        flat_index: usize,
+        artists: &[ArtistUIViewData],
+    ) -> Option<DiscographyGroup> {
+        let child_idx = self
+            .expansion
+            .child_ordinal_at(flat_index, artists, |a| &a.id)?;
+        discography::section_of(&self.expansion.children, child_idx)
+    }
+
+    /// Render a release-type section header: a full slot on the album rows'
+    /// chassis (same depth fill, focus ring, hover and opacity fall-off), so
+    /// it navigates and highlights like any other row.
+    ///
+    /// Enter or a click on the highlighted header plays the section; the
+    /// chevron (or Shift+Enter) folds it; the right-click menu holds the
+    /// batch actions.
+    ///
+    /// Layout: `[indent] [chevron, in the sub-index column] [SECTION NAME]
+    /// [hairline rule ⋯] [count] [years]`. The name starts on the album rows'
+    /// thumbnail rail (or their title rail with the thumbnail column off).
+    fn render_section_header_row<'a>(
+        header: &SectionHeader,
+        ctx: &crate::widgets::slot_list::SlotListRowContext,
+        stable_viewport: bool,
+        open_menu: Option<&'a crate::app_message::OpenMenu>,
+    ) -> Element<'a, ArtistsMessage> {
+        use iced::widget::{Space, mouse_area, text};
+
+        use crate::{
+            theme,
+            widgets::slot_list::{
+                SLOT_LIST_INDEX_WIDTH, SLOT_LIST_SLOT_PADDING, child_slot_button,
+                slot_list_static_icon_color, slot_list_text,
+            },
+        };
+
+        let style = ctx.slot_style(false, false, 1);
+        let m = ctx.metrics;
+
+        // On a loud-fill row every tint gives way to the row's own ink.
+        let accent = slot_list_static_icon_color(style, theme::accent_bright(), ctx.opacity);
+        let chevron_color = slot_list_static_icon_color(style, theme::fg2(), ctx.opacity);
+        let rule_color = slot_list_static_icon_color(
+            style,
+            theme::accent_fill(),
+            ctx.opacity * SECTION_RULE_ALPHA,
+        );
+
+        let chevron_path = if header.is_collapsed() {
+            "assets/icons/chevron-right.svg"
+        } else {
+            "assets/icons/chevron-down.svg"
+        };
+        let chevron_size = (m.metadata_size * 1.15).round();
+        let chevron = container(
+            crate::embedded_svg::svg_widget(chevron_path)
+                .width(Length::Fixed(chevron_size))
+                .height(Length::Fixed(chevron_size))
+                .style(move |_theme, _status| iced::widget::svg::Style {
+                    color: Some(chevron_color),
+                }),
+        )
+        .width(Length::Fixed(SLOT_LIST_INDEX_WIDTH))
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center);
+        // The whole sub-index column is the fold target, full row height, so
+        // the click needs no aim; the rest of the row is the row's own click.
+        let chevron = mouse_area(chevron)
+            .on_press(ArtistsMessage::ToggleSection(ctx.item_index))
+            .interaction(iced::mouse::Interaction::Pointer);
+
+        // The name in tracked capitals. iced has no letter-spacing, so each
+        // letter is its own text and the row's spacing is the tracking.
+        let name_size = m.subtitle_size;
+        let mut name = Row::new()
+            .spacing((name_size * SECTION_NAME_TRACKING).round())
+            .align_y(Alignment::Center);
+        for letter in header.group.label().to_uppercase().chars() {
+            name = name.push(if letter == ' ' {
+                Space::new()
+                    .width(Length::Fixed((name_size * 0.3).round()))
+                    .boxed()
+            } else {
+                text(letter.to_string())
+                    .size(name_size)
+                    .font(theme::weighted_ui_font(iced::font::Weight::Bold))
+                    .color(accent)
+                    .boxed()
+            });
+        }
+
+        let rule = container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .style(move |_| container::Style {
+                background: Some(rule_color.into()),
+                ..Default::default()
+            });
+
+        // The count and the year span read as one right-hand note, joined
+        // the way the artwork pill joins its facts.
+        let note = match header.years_label() {
+            Some(years) => format!(
+                "{} \u{2022} {years}",
+                header.group.count_label(header.count)
+            ),
+            None => header.group.count_label(header.count),
+        };
+        let heading = Row::<Element<'_, ArtistsMessage>>::new()
+            .spacing(SECTION_HEADER_SPACING)
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+            .push(name.boxed())
+            .push(rule.boxed())
+            .push(slot_list_text(note, m.metadata_size, style.subtext_color).boxed());
+
+        // The album rows' leading geometry (indent, sub-index column, spacing
+        // 4), so the chevron sits where their numbers do and the name starts
+        // on the rail of their next column (the thumbnail, else the title).
+        let content = Row::<Element<'_, ArtistsMessage>>::new()
+            .push(
+                container(text(""))
+                    .width(Length::Fixed(SECTION_HEADER_INDENT))
+                    .boxed(),
+            )
+            .push(chevron.boxed())
+            .push(heading.boxed())
+            .spacing(4.0)
+            .padding(iced::Padding {
+                left: SLOT_LIST_SLOT_PADDING,
+                right: SECTION_HEADER_RIGHT_INSET,
+                top: 4.0,
+                bottom: 4.0,
+            })
+            .align_y(Alignment::Center)
+            .height(Length::Fill);
+
+        let header_el = child_slot_button(
+            content,
+            ctx,
+            style,
+            stable_viewport,
+            ArtistsMessage::SlotList,
+        );
+
+        crate::widgets::context_menu::wrap_library_row(
+            crate::View::Artists,
+            ctx.item_index,
+            header_el,
+            Self::section_menu(),
+            open_menu,
+            ArtistsMessage::ContextMenuAction,
+            ArtistsMessage::SetOpenMenu,
+        )
+    }
+
     /// Render a child album row in the slot list (indented, simpler layout)
     fn render_album_child_row<'a>(
         &self,
         album: &AlbumUIViewData,
+        artists: &[ArtistUIViewData],
         ctx: &crate::widgets::slot_list::SlotListRowContext,
-        sub_index_label: &str,
         covers: crate::views::RowCovers<'a>,
         stable_viewport: bool,
         open_menu: Option<&'a crate::app_message::OpenMenu>,
     ) -> Element<'a, ArtistsMessage> {
+        let sub_index_label = self.album_sub_index_label(ctx.item_index, artists);
+        let section = self.album_section(ctx.item_index, artists);
         let navigate_msg = ArtistsMessage::NavigateAndExpandAlbum(album.id.clone());
+        // Under a section header a row says what the header doesn't: the
+        // types it leaves out, the version, the explicit mark. A flat list
+        // (grouping off, or only plain albums) keeps its rows bare.
+        let title_tags = section
+            .map(|group| {
+                row_tags(album, group)
+                    .into_iter()
+                    .map(|tag| crate::widgets::slot_list::TitleTag {
+                        accent: match tag.kind {
+                            RowTagKind::Type => true,
+                            RowTagKind::Version | RowTagKind::Explicit => false,
+                        },
+                        text: tag.text,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Appears On lists other artists' albums, so each row names its own.
+        let guest_album = section == Some(DiscographyGroup::AppearsOn);
         let album_el = super::super::expansion::render_child_album_row(
             album,
             ctx,
-            sub_index_label,
+            &sub_index_label,
             covers.get(&album.id),
             ArtistsMessage::SlotList,
             super::super::expansion::ChildAlbumRowOptions {
                 show_artwork: self.column_visibility.thumbnail,
-                show_artist: false, // artist is already the parent row
+                // Elsewhere the parent row already names the artist.
+                show_artist: guest_album,
                 stable_viewport,
                 depth: 1, // child albums under artist
                 on_star_click: Some(ArtistsMessage::ClickToggleStar(ctx.item_index)),
                 on_song_count_click: Some(navigate_msg.clone()),
                 on_album_click: Some(navigate_msg),
-                on_artist_click: None,
+                on_artist_click: guest_album
+                    .then(|| ArtistsMessage::NavigateAndExpandArtist(album.artist_id.clone())),
+                title_tags,
             },
         );
 
@@ -697,9 +880,7 @@ pub(crate) fn pill_bio_and_link<'a>(
     fn text(field: Option<&String>) -> Option<&str> {
         field.map(String::as_str).filter(|s| !s.trim().is_empty())
     }
-    let web = |field: Option<&'a String>| {
-        text(field).filter(|url| nokkvi_data::utils::server_url::has_http_scheme(url))
-    };
+    let web = |field: Option<&'a String>| crate::widgets::metadata_pill::web_link(text(field));
     let bio =
         text(artist.biography.as_ref()).or_else(|| text(info.and_then(|i| i.biography.as_ref())));
     let link = web(artist.external_url.as_ref())
@@ -707,19 +888,23 @@ pub(crate) fn pill_bio_and_link<'a>(
     (bio, link)
 }
 
-/// The bio link's label: it names where the link goes ("Read more on
-/// last.fm"), since Navidrome fills the link from whichever agent answered
-/// and it is not always Last.fm. "Read more" when the link has no host.
-pub(crate) fn bio_link_label(url: &str) -> String {
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|parsed| {
-            let host = parsed.host_str()?;
-            let host = host.strip_prefix("www.").unwrap_or(host);
-            (!host.is_empty()).then(|| format!("Read more on {host}"))
-        })
-        .unwrap_or_else(|| "Read more".to_string())
-}
+/// The section header's hairline rule: the accent at the strength of the
+/// pill's "SIMILAR ARTISTS" rules, so both headers read as one house style.
+const SECTION_RULE_ALPHA: f32 = SIMILAR_RULE_ALPHA;
+
+/// Tracking between the section name's capitals, as a share of the font size.
+const SECTION_NAME_TRACKING: f32 = 0.14;
+
+/// The album rows' leading indent (`child_leading_indent(1)` in
+/// `views/expansion.rs`), so the chevron sits in their sub-index column.
+const SECTION_HEADER_INDENT: f32 = 15.0;
+
+/// Gap between the name, the rule, the count and the years.
+const SECTION_HEADER_SPACING: f32 = 10.0;
+
+/// Right inset, so the count and years end short of the row's edge the way
+/// the album rows' heart does.
+const SECTION_HEADER_RIGHT_INSET: f32 = 14.0;
 
 /// How strongly the accent tints the hairlines either side of the "SIMILAR
 /// ARTISTS" header. The theme's `border()` is a dark groove on the artwork
@@ -941,19 +1126,6 @@ mod tests {
             pill_bio_and_link(&artist, Some(&blank)),
             (Some("native bio"), None)
         );
-    }
-
-    #[test]
-    fn the_link_label_names_the_site_it_opens() {
-        assert_eq!(
-            bio_link_label("https://www.last.fm/music/Sia"),
-            "Read more on last.fm"
-        );
-        assert_eq!(
-            bio_link_label("https://isissemajhall.com/"),
-            "Read more on isissemajhall.com"
-        );
-        assert_eq!(bio_link_label("not a url"), "Read more");
     }
 }
 

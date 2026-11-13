@@ -19,7 +19,7 @@ use crate::{
     app_message::{HotkeyMessage, Message},
     update::modals::ActiveModal,
     views,
-    views::expansion::SlotListEntry,
+    views::{DiscographyRow, expansion::SlotListEntry},
 };
 
 impl Nokkvi {
@@ -182,8 +182,12 @@ impl Nokkvi {
                     |a| &a.id,
                 ) {
                     let item = match entry {
-                        SlotListEntry::Child(album, _) => {
+                        SlotListEntry::Child(DiscographyRow::Album(album), _) => {
                             InfoModalItem::from_album_view_data(album, None)
+                        }
+                        // A release-type section header has nothing to show.
+                        SlotListEntry::Child(DiscographyRow::Section(_), _) => {
+                            return Task::none();
                         }
                         SlotListEntry::Parent(artist) => {
                             InfoModalItem::from_artist_view_data(artist)
@@ -293,6 +297,9 @@ impl Nokkvi {
             HotkeyMessage::ArtistStarredStatusUpdated(artist_id, new_starred_status) => {
                 self.handle_artist_starred_status_updated(artist_id, new_starred_status)
             }
+            HotkeyMessage::PlaylistStarredStatusUpdated(playlist_id, new_starred_status) => {
+                self.handle_playlist_starred_status_updated(playlist_id, new_starred_status)
+            }
             HotkeyMessage::AddToQueue => self.handle_add_to_queue(),
             HotkeyMessage::SaveQueueAsPlaylist => self.handle_save_queue_as_playlist(),
             HotkeyMessage::RemoveFromQueue => self.handle_remove_from_queue(),
@@ -311,6 +318,12 @@ impl Nokkvi {
             }
             HotkeyMessage::ArtistRatingUpdated(artist_id, new_rating) => {
                 self.handle_artist_rating_updated(artist_id, new_rating)
+            }
+            HotkeyMessage::PlaylistRatingUpdated(playlist_id, new_rating) => {
+                self.handle_playlist_rating_updated(playlist_id, new_rating)
+            }
+            HotkeyMessage::PlaylistAnnotated(playlist_id) => {
+                self.handle_playlist_annotated(&playlist_id)
             }
             HotkeyMessage::ExpandCenter => self.handle_expand_center(),
             HotkeyMessage::FocusNavigation => self.handle_focus_navigation(),

@@ -187,8 +187,15 @@ pub(crate) fn make_album(id: &str, name: &str, artist: &str) -> AlbumUIViewData 
         mbz_album_id: None,
         release_type: None,
         comment: None,
+        notes: None,
+        external_url: None,
         tags: Vec::new(),
         participants: Vec::new(),
+        album_artist_ids: Vec::new(),
+        release_types: Vec::new(),
+        version: None,
+        record_label: None,
+        explicit: false,
         release_date: None,
         original_date: None,
         original_year: None,
@@ -256,6 +263,8 @@ pub(crate) fn make_playlist(
     name: &str,
 ) -> nokkvi_data::backend::playlists::PlaylistUIViewData {
     nokkvi_data::backend::playlists::PlaylistUIViewData {
+        is_starred: false,
+        rating: None,
         id: id.to_string(),
         name: name.to_string(),
         comment: String::new(),
@@ -429,7 +438,7 @@ pub(crate) fn expand_albums_with(app: &mut Nokkvi, id: &str, children: Vec<SongU
 pub(crate) fn expand_artists_with(app: &mut Nokkvi, id: &str, children: Vec<AlbumUIViewData>) {
     app.artists_page.expansion.expanded_id = Some(id.into());
     app.artists_page.expansion.parent_offset = 0;
-    app.artists_page.expansion.children = children;
+    app.artists_page.expansion.children = children.into_iter().map(Into::into).collect();
 }
 
 /// Set up a Genres expansion with the given id and child albums.

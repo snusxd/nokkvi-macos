@@ -14,6 +14,7 @@ pub(crate) mod bounds_tag;
 pub(crate) mod drag_column;
 pub(crate) mod drag_strip;
 pub(crate) mod eq_slider;
+pub(crate) mod fit_row;
 pub(crate) mod format_info;
 pub(crate) mod harbour_light;
 pub(crate) mod harbour_runes;

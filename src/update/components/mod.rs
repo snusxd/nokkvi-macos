@@ -969,7 +969,9 @@ impl Nokkvi {
     /// replays the event the server no longer echoes to nokkvi
     /// ([`LibraryChange::for_annotation`]).
     /// A song's confirmed love goes to `SongLoved` instead, which rates it
-    /// five stars and replays the same event.
+    /// five stars and replays the same event. A playlist's goes to
+    /// `PlaylistAnnotated`, which reloads the list only under a sort the
+    /// star or rating can reorder.
     ///
     /// [`LibraryChange::for_annotation`]: crate::services::navidrome_sse::LibraryChange::for_annotation
     pub(crate) fn star_result_message(
@@ -981,6 +983,9 @@ impl Nokkvi {
         match result {
             Ok(()) if star && kind == ItemKind::Song => {
                 Message::Hotkey(HotkeyMessage::SongLoved(id))
+            }
+            Ok(()) if kind == ItemKind::Playlist => {
+                Message::Hotkey(HotkeyMessage::PlaylistAnnotated(id))
             }
             Ok(()) => Message::LibraryChanged(
                 crate::services::navidrome_sse::LibraryChange::for_annotation(kind, id),
@@ -1005,18 +1010,14 @@ impl Nokkvi {
     /// taken it (`star_result_message`).
     pub(crate) fn starred_flag_message(id: String, kind: ItemKind, starred: bool) -> Message {
         use HotkeyMessage::{
-            AlbumStarredStatusUpdated, ArtistStarredStatusUpdated, SongStarredStatusUpdated,
+            AlbumStarredStatusUpdated, ArtistStarredStatusUpdated, PlaylistStarredStatusUpdated,
+            SongStarredStatusUpdated,
         };
         Message::Hotkey(match kind {
             ItemKind::Album => AlbumStarredStatusUpdated(id, starred),
             ItemKind::Artist => ArtistStarredStatusUpdated(id, starred),
-            // Playlist starring/unstarring isn't surfaced in the UI today
-            // (playlist Parents return None from get_center_item_info, and
-            // ClickToggleStar on a playlist Parent emits Action::None).
-            // Until that lands, route Playlist through the Song handler so
-            // a stray dispatch can't corrupt unrelated state — the handler
-            // mutates only by-id matches, so it's a no-op for non-song ids.
-            ItemKind::Song | ItemKind::Playlist => SongStarredStatusUpdated(id, starred),
+            ItemKind::Song => SongStarredStatusUpdated(id, starred),
+            ItemKind::Playlist => PlaylistStarredStatusUpdated(id, starred),
         })
     }
 
@@ -1037,11 +1038,14 @@ impl Nokkvi {
     /// Build the appropriate rating-updated message for a given item kind.
     /// Used to revert optimistic rating updates on API failure.
     pub(crate) fn rating_revert_message(id: String, kind: ItemKind, rating: u32) -> Message {
-        use HotkeyMessage::{AlbumRatingUpdated, ArtistRatingUpdated, SongRatingUpdated};
+        use HotkeyMessage::{
+            AlbumRatingUpdated, ArtistRatingUpdated, PlaylistRatingUpdated, SongRatingUpdated,
+        };
         Message::Hotkey(match kind {
             ItemKind::Album => AlbumRatingUpdated(id, rating),
             ItemKind::Artist => ArtistRatingUpdated(id, rating),
-            ItemKind::Song | ItemKind::Playlist => SongRatingUpdated(id, rating),
+            ItemKind::Song => SongRatingUpdated(id, rating),
+            ItemKind::Playlist => PlaylistRatingUpdated(id, rating),
         })
     }
 
@@ -1103,6 +1107,9 @@ impl Nokkvi {
         current_rating: u32,
     ) -> Message {
         match result {
+            Ok(()) if kind == ItemKind::Playlist => {
+                Message::Hotkey(HotkeyMessage::PlaylistAnnotated(id))
+            }
             Ok(()) => Message::LibraryChanged(
                 crate::services::navidrome_sse::LibraryChange::for_annotation(kind, id),
             ),
@@ -1798,6 +1805,8 @@ impl Nokkvi {
             artist_info: _,
             // Cache, in-flight set and the id wait; generation carried.
             artist_recs: _,
+            // Cache and in-flight set; session generation carried.
+            album_info: _,
             // Shelves + search; both generations carried.
             harbour: _,
             // Crate + modal; search generation carried.
@@ -2007,6 +2016,7 @@ impl Nokkvi {
         self.session_generation = self.session_generation.carried_forward();
         self.artist_info.reset_for_session();
         self.artist_recs.reset_for_session();
+        self.album_info.reset_for_session();
         self.harbour.reset_for_session();
         self.trawl.reset_for_session();
         self.drop_active_playlist_context();
@@ -2068,6 +2078,8 @@ impl Nokkvi {
         self.artists_page.expansion.clear();
         self.genres_page.expansion.clear();
         self.playlists_page.expansion.clear();
+        // The next server answers for itself (`ServerVersionFetched`).
+        self.playlists_page.annotations = false;
         for common in self.all_slot_list_commons_mut() {
             common.clear_selection_for_refresh();
         }

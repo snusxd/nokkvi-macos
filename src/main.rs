@@ -230,6 +230,9 @@ pub struct Nokkvi {
     /// The similar artists ListenBrainz and Deezer listed this session for the artists
     /// the Artists view centred, keyed by artist id.
     pub artist_recs: crate::state::ArtistRecsState,
+    /// The `getAlbumInfo2` answers fetched this session (the Albums view's
+    /// album notes and link), keyed by album id.
+    pub album_info: crate::state::AlbumInfoState,
 
     /// Harbour home view state — discovery shelves + whole-library
     /// search results. Populated on first visit / library-filter change.
@@ -514,6 +517,7 @@ impl Default for Nokkvi {
             session_generation: crate::state::StaleDropGen::default(),
             artist_info: crate::state::ArtistInfoState::default(),
             artist_recs: crate::state::ArtistRecsState::default(),
+            album_info: crate::state::AlbumInfoState::default(),
             harbour: crate::state::HarbourState::default(),
             // Persisted player settings (overridden by PlayerSettingsLoaded).
             // LivePlayerSettings derives Default, which zeros every scalar
@@ -536,6 +540,7 @@ impl Default for Nokkvi {
                 auto_follow_playing: true,
                 similar_artists_online: true,
                 similar_artists_deezer: true,
+                group_artist_albums: true,
                 volume: 1.0,
                 sfx_volume: 0.68,
                 seek_step_secs: nokkvi_data::types::player_settings::SEEK_STEP_DEFAULT_SECS,

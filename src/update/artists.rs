@@ -14,14 +14,11 @@ use tracing::debug;
 use crate::{
     Nokkvi, View,
     app_message::{ArtworkMessage, FindMessage, Message, NavigationMessage},
+    state::CENTRE_SETTLE,
     update::{ArtistsTarget, PagedLoad, Reload},
     views::{self, ArtistsAction, ArtistsMessage, HasCommonAction},
     widgets,
 };
-
-/// How long an artist must stay centred before the Artists view asks the
-/// server for its info (`getArtistInfo2`).
-const ARTIST_INFO_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 impl Nokkvi {
     /// Sort UI artists in-place by rating (Some > None, then desc by value).
@@ -210,7 +207,10 @@ impl Nokkvi {
     }
 
     pub(crate) fn handle_load_artist_large_artwork(&mut self, artist_id: String) -> Task<Message> {
-        if self.artwork.large_artwork.peek(&artist_id).is_some() {
+        // Shown already, or on its way onto the GPU (`large_staging`).
+        if self.artwork.large_artwork.peek(&artist_id).is_some()
+            || self.artwork.large_staging.contains_key(&artist_id)
+        {
             return Task::none();
         }
 
@@ -305,7 +305,7 @@ impl Nokkvi {
     /// centred. Every centring path goes through this, so the biography
     /// follows the same trigger as the artwork panel it sits on. The info is
     /// asked for only once the artist has stayed centred for
-    /// [`ARTIST_INFO_SETTLE`]: a first ask makes the server run its agents
+    /// [`CENTRE_SETTLE`]: a first ask makes the server run its agents
     /// and broadcast a library refresh, too much to do for every row a held
     /// arrow key scrolls past.
     pub(crate) fn artist_center_tasks(&mut self, artist_id: String) -> Task<Message> {
@@ -324,14 +324,38 @@ impl Nokkvi {
         Task::batch([artwork, self.artist_info_settle_task(artist_id)])
     }
 
-    /// Start the settle timer for a newly centred artist, when its info or
-    /// its similar artists (with a source on) are still to be asked for.
-    /// One timer serves both: they are asked for at the same moment.
+    /// Whether the centred artist may be asked about now, the one gate on
+    /// its info and its similar artists: the Artists list is on screen and
+    /// the artist stopped on ([`Self::centred_ask_allowed`]). The info ask
+    /// makes the server run its agents and tell every client; the
+    /// similar-artists ask sends the artist's MusicBrainz id or name to
+    /// ListenBrainz and Deezer. The Similar Artists modal asks on its own:
+    /// opening it is the user asking.
+    pub(crate) fn artist_info_wanted(&self) -> bool {
+        self.centred_ask_allowed(View::Artists)
+    }
+
+    /// The centred artist just became askable
+    /// ([`Self::newly_wanted_asks_task`]): start its settle timer.
+    pub(crate) fn artist_info_now_wanted_task(&mut self) -> Task<Message> {
+        match self.centred_artist_id() {
+            Some(artist_id) => self.artist_info_settle_task(artist_id),
+            None => Task::none(),
+        }
+    }
+
+    /// Start the settle timer for a newly centred artist, when it may be
+    /// asked about ([`Self::artist_info_wanted`]) and its info or its
+    /// similar artists (with a source on) are still to be asked for. One
+    /// timer serves both: they are asked for at the same moment.
     fn artist_info_settle_task(&mut self, artist_id: String) -> Task<Message> {
+        if !self.artist_info_wanted() {
+            return Task::none();
+        }
         let info_wanted = self.artist_info.centre(&artist_id);
         let recs_wanted = self.rec_sources().any() && self.artist_recs.centre(&artist_id);
         if (info_wanted || recs_wanted) && self.app_service.is_some() {
-            Task::perform(tokio::time::sleep(ARTIST_INFO_SETTLE), move |()| {
+            Task::perform(tokio::time::sleep(CENTRE_SETTLE), move |()| {
                 Message::ArtistsLoader(crate::app_message::ArtistsLoaderMessage::InfoSettled(
                     artist_id,
                 ))
@@ -342,14 +366,17 @@ impl Nokkvi {
     }
 
     /// An artist's settle timer fired: ask for its info and its similar
-    /// artists, each if it is still the one that cache centred last.
+    /// artists, each if it is still the one that cache centred last and the
+    /// artist may still be asked about (when it may again, the root `update`
+    /// centres it again: [`Self::newly_wanted_asks_task`]).
     pub(crate) fn handle_artist_info_settled(&mut self, artist_id: String) -> Task<Message> {
-        let info = if self.artist_info.settled(&artist_id) {
+        let wanted = self.artist_info_wanted();
+        let info = if self.artist_info.settled(&artist_id) && wanted {
             self.artist_info_task(artist_id.clone())
         } else {
             Task::none()
         };
-        let recs = if self.artist_recs.settled(&artist_id) {
+        let recs = if self.artist_recs.settled(&artist_id) && wanted {
             self.artist_recs_task(artist_id)
         } else {
             Task::none()
@@ -458,7 +485,10 @@ impl Nokkvi {
     /// Forget every similar-artist list and ask again for the centred artist
     /// and the open modal's: what the lists say changed, through the sources,
     /// or through the library's artists, whose "in library" standing each
-    /// row carries (another active library, a server scan).
+    /// row carries (another active library, a server scan). The centred
+    /// artist is asked now only while it may be ([`Self::artist_info_wanted`]:
+    /// a source is usually changed from Settings); otherwise the emptied
+    /// cache makes it asked when the Artists list is next on screen.
     pub(crate) fn reask_artist_recs(&mut self) -> Task<Message> {
         use crate::widgets::similar_artists_modal::SimilarArtistsStatus;
 
@@ -480,6 +510,7 @@ impl Nokkvi {
         }
         let artists: Vec<String> = self
             .centred_artist_id()
+            .filter(|_| self.artist_info_wanted())
             .into_iter()
             .chain(modal_artist)
             .collect();
@@ -684,15 +715,17 @@ impl Nokkvi {
             return task;
         }
         if let ArtistsMessage::OpenExternalUrl(url) = msg {
-            if let Err(e) = std::process::Command::new("xdg-open").arg(&url).spawn() {
-                tracing::warn!("Failed to open URL '{}': {}", url, e);
-            }
+            super::components::open_external_url(&url);
             return Task::none();
         }
         // Capture child album ids before consuming `msg` so we can fan out
         // mini-artwork fetches for the newly-loaded expansion children.
+        // A late load (`ExpansionState::takes_children`) stores no rows, so it
+        // warms none either.
         let expansion_album_ids = match &msg {
-            ArtistsMessage::AlbumsLoaded(_, albums) => {
+            ArtistsMessage::AlbumsLoaded(id, albums)
+                if self.artists_page.expansion.takes_children(id) =>
+            {
                 super::components::expansion_child_album_ids(albums)
             }
             _ => Vec::new(),
@@ -834,9 +867,7 @@ impl Nokkvi {
                 if self.library_play_adds_to_queue() {
                     let name = self
                         .artists_page
-                        .expansion
-                        .children
-                        .iter()
+                        .expanded_albums()
                         .find(|a| a.id == album_id)
                         .map_or_else(|| "album".to_string(), |a| a.name.clone());
                     return self.shell_fire_and_forget_task(
@@ -901,12 +932,11 @@ impl Nokkvi {
                     )
                 } else {
                     // Album within expanded artist
-                    Self::find_current_rating(
-                        &self.artists_page.expansion.children,
-                        &item_id,
-                        |a| &a.id,
-                        |a| a.rating,
-                    )
+                    self.artists_page
+                        .expanded_albums()
+                        .find(|a| a.id == item_id)
+                        .and_then(|a| a.rating)
+                        .unwrap_or(0)
                 };
                 return self.set_item_rating_task(item_id, kind, new_rating, current);
             }

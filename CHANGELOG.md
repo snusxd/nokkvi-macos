@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The About modal now credits Fable 5.2 instead of Fable 5.1 among the shipwrights.
 - The macOS app icon now sits on a dark graphite plate, with neutral greys in place of the teal tint.
 - On macOS, the hotkeys that defaulted to Ctrl, like Shuffle Play and Roulette, now default to Cmd.
 - On macOS, Cmd+click replaces Ctrl+click for selecting several rows.
@@ -28,41 +29,53 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
-## v0.29.0 — 2026-11-10
+## v0.30.0 — 2026-11-12
 
 ### Added
 
-- Settings → Playback has a new Streaming Quality section with Stream Format (Original, Opus or MP3) and Max Bitrate (64 to 320 kbps).
-- With Stream Format set to Opus or MP3, lossless songs above Max Bitrate now stream from your server as a smaller copy.
-- MP3s and other compressed songs more than a quarter above Max Bitrate also stream as a smaller copy.
-- With Opus or MP3 chosen, songs in formats nokkvi can't decode, like APE, WavPack or DSD, now play as a smaller copy.
-- With Opus or MP3 chosen, songs with more than two channels always stream as a stereo MP3 copy.
-- A Streaming Quality change applies from the next song, leaving the song playing as it is.
-- The Waveform seek bar shows the Line style for songs streamed as a smaller copy, unless their waveform was saved earlier.
-- Seeking works in a smaller copy on Navidrome 0.51 or newer.
-- A seek in a smaller copy that fails leaves the song playing where it was.
-- A failed seek in a smaller copy says so, and says when the server is busy or not answering.
-- When the connection drops partway through a smaller copy, nokkvi picks the song up where it stopped, on Navidrome 0.51 or newer.
-- If picking a dropped smaller copy up again keeps failing, nokkvi says the server stopped sending the song.
-- Streaming Quality shows when your server's player settings force a format or a bitrate limit for nokkvi.
-- `nokkvi status` now reports the playing stream's codec, bitrate, sample rate and delivery, whether it is the original file, and how it seeks.
-
-### Changed
-
-- A seek refused in a song your server transcodes on its own now says the server is choosing its format.
+- An expanded artist's albums are grouped under release-type headers: Albums, EPs, Singles, Live, Compilations and more, with Appears On last.
+- An artist with only plain albums keeps the flat album list.
+- Enter on a release-type header plays that whole section in list order, or adds it from the split view's library pane.
+- Shift+Enter on a release-type header, or a click on its chevron, folds or unfolds the section.
+- Folded sections stay folded for every artist until nokkvi quits.
+- A release-type header's right-click menu shuffles its section, or adds it to the queue, a playlist or a mix.
+- A selected release-type header stands for all of its albums in batch actions.
+- Album rows under a release-type header carry small tags for what the header leaves out, like Live on an EP.
+- Album rows under a release-type header also tag the album version, like Deluxe Edition, and mark explicit albums with an E.
+- Albums under Appears On name their own artist.
+- Settings → General has Group Artist Albums by Release Type, on by default.
+- With Group Artist Albums by Release Type off, an expanded artist's albums show as one list, newest first.
+- Get Info on an album shows its version, like Deluxe Edition, and its record label when the tags carry them.
+- Playlist rows have a clickable heart and star rating on Navidrome 0.64 or newer, like album rows.
+- The star and rating keys work on a focused playlist row.
+- The Playlists view sorts by Favorited and by Rating.
+- The Playlists columns menu has Stars and Love toggles; Stars is off by default and shows under a Rating sort.
+- The playlist artwork panel shows Favorited and the rating.
+- The Albums artwork panel shows the centred album's notes under its stats when Navidrome has any.
+- A Read more link under an album's notes opens the album's page, usually on Last.fm.
+- Get Info on an album lists its notes and external link when Navidrome has them.
 
 ### Fixed
 
-- After a descending queue sort, songs that share a rating or other sorted value no longer flip order when the track changes.
-- After a descending queue sort with shuffle off, Next now plays the song shown below the current one.
-- A transcode served from Navidrome's cache is now labelled with the codec actually playing, instead of the file's own format.
-- BIT-PERFECT now shows only when the stream is the song's original file.
-- During a skip crossfade into a transcoded song, the format label now shows its codec instead of the outgoing song's.
-- When the next song fails to load, Next now says why instead of "No next track".
-- When the previous song fails to load, Previous now says why instead of failing silently.
+- `nokkvi love` and `nokkvi rate` now refuse during radio playback instead of starring or rating the last queue song.
+- With crossfade off, seeking to a song's last second while paused no longer starts the next song playing.
+- Clicking a song just as the playing one changes no longer leaves the queue one song past the click.
+- Stop pressed just as a song changes gaplessly no longer starts the next song.
+- Dragging a row to the queue from under an expanded album, artist or genre now shows that row on the drag label.
+- A slow album or track load no longer re-opens a row you already closed, or replaces the row you opened after it.
+- Switching between Albums and the Queue no longer downloads the same album thumbnails again each time.
+- The Playlists list no longer jumps back to the top when a playlist changes on the server.
+- The Albums artwork panel no longer repeats the year, like "2003 (2003)", for an album with no original date.
+- The Albums artwork panel no longer reads "0 (2021)" for an album tagged with only a year.
+- Launching nokkvi no longer asks the server, ListenBrainz and Deezer about the first artist in the Artists list before that view is opened.
+- A roulette spin in Artists no longer looks up the artists it passes when the list reloads mid-spin.
+- The Albums, Artists, Songs and Playlists lists no longer blink to "Loading..." when the server reports a change, like a scrobble.
+- Scrolling to the end of the loaded rows no longer blanks the list while the next page loads.
+- The big cover no longer goes blank for an instant between the thumbnail and the full-size picture when you land on an album or artist.
 
 ## Older releases
 
+- **v0.29.x** (2026-11-10, v0.29.0): [CHANGELOG-0.29.md](./changelog-archive/CHANGELOG-0.29.md)
 - **v0.28.x** (2026-10-22 → 2026-11-03, v0.28.0–v0.28.2): [CHANGELOG-0.28.md](./changelog-archive/CHANGELOG-0.28.md)
 - **v0.27.x** (2026-10-17 → 2026-10-20, v0.27.0–v0.27.2): [CHANGELOG-0.27.md](./changelog-archive/CHANGELOG-0.27.md)
 - **v0.26.x** (2026-10-14 → 2026-10-15, v0.26.0–v0.26.1): [CHANGELOG-0.26.md](./changelog-archive/CHANGELOG-0.26.md)

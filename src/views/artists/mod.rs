@@ -7,17 +7,19 @@
 //! Module layout:
 //! - `mod.rs`: types (Page, Message, Action, ViewData), trait impls, tests
 //!   for column declarations
+//! - `discography.rs`: the rows under an expanded artist (albums plus the
+//!   release-type section headers) and the walks over them
 //! - `update.rs`: `impl ArtistsPage { fn update }` + the toggle-column test
 //! - `view.rs`: `impl ArtistsPage { fn view, fn render_artist_row,
 //!   fn render_album_child_row }`. The Stars / Plays auto-show-on-sort
 //!   decision is centralized in `crate::views::auto_show_on_sort`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use iced::widget::image;
 use nokkvi_data::{
     backend::{albums::AlbumUIViewData, artists::ArtistUIViewData},
-    types::ItemKind,
+    types::{ItemKind, discography::DiscographyGroup},
 };
 
 use super::expansion::ExpansionState;
@@ -26,17 +28,32 @@ use crate::{
     widgets::{SlotListPageState, view_header::SortMode},
 };
 
+pub(crate) mod discography;
 mod update;
 mod view;
+
+pub(crate) use discography::{DiscographyRow, SectionHeader};
 
 /// Artists page local state
 #[derive(Debug)]
 pub struct ArtistsPage {
     pub common: SlotListPageState,
-    /// Inline expansion state (artist → albums)
-    pub expansion: ExpansionState<AlbumUIViewData>,
+    /// Inline expansion state (artist → albums, under release-type section
+    /// headers when the artist's discography has more than plain albums)
+    pub expansion: ExpansionState<DiscographyRow>,
     /// Per-column visibility toggles surfaced via the columns-cog dropdown.
     pub column_visibility: ArtistsColumnVisibility,
+    /// Sort an expanded artist's albums into release-type sections (General →
+    /// Group Artist Albums by Release Type). Off keeps the server's flat
+    /// list. The root hands the setting in on every settings load
+    /// ([`Self::set_grouping`]).
+    pub group_by_release_type: bool,
+    /// The sections the user folded this session, by kind: the next artist's
+    /// albums (and a reload of this one's) arrive with those sections folded.
+    pub collapsed_sections: HashSet<DiscographyGroup>,
+    /// The expanded artist's album ids in the order the server sent them
+    /// (newest first), so a grouping change can rebuild the flat list.
+    server_order: Vec<String>,
 }
 
 // Toggleable artists columns. The artist name is always shown; everything
@@ -117,6 +134,9 @@ pub enum ArtistsMessage {
     ExpandCenter,
     FocusAndExpand(usize), // Clicked 'X albums' — focus that row and expand it
     CollapseExpansion,
+    /// Click on a release-type section header's chevron (the header's
+    /// flattened row index): fold or unfold that section.
+    ToggleSection(usize),
     /// Albums loaded for expanded artist (artist_id, albums)
     AlbumsLoaded(String, Vec<AlbumUIViewData>),
 
@@ -230,6 +250,9 @@ impl Default for ArtistsPage {
             ),
             expansion: ExpansionState::default(),
             column_visibility: ArtistsColumnVisibility::default(),
+            group_by_release_type: true,
+            collapsed_sections: HashSet::new(),
+            server_order: Vec::new(),
         }
     }
 }
@@ -237,6 +260,69 @@ impl Default for ArtistsPage {
 impl ArtistsPage {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Every album under the expanded artist, in display order, the ones
+    /// folded into a collapsed section included.
+    pub fn expanded_albums(&self) -> impl Iterator<Item = &AlbumUIViewData> {
+        discography::albums(&self.expansion.children)
+    }
+
+    /// [`Self::expanded_albums`], mutably, for star / rating / play-count sync.
+    pub fn expanded_albums_mut(&mut self) -> impl Iterator<Item = &mut AlbumUIViewData> {
+        discography::albums_mut(&mut self.expansion.children)
+    }
+
+    /// The rows to store for `artist_id`'s freshly loaded `albums` (the
+    /// server's order, newest first): grouped by release type when the
+    /// setting says so, with the sections the user folded this session
+    /// folded again.
+    pub(crate) fn rows_for_loaded(
+        &mut self,
+        artist_id: &str,
+        albums: Vec<AlbumUIViewData>,
+    ) -> Vec<DiscographyRow> {
+        self.server_order = albums.iter().map(|album| album.id.clone()).collect();
+        discography::build_rows(
+            albums,
+            artist_id,
+            self.group_by_release_type,
+            &self.collapsed_sections,
+        )
+    }
+
+    /// Turn release-type grouping on or off (the root hands the setting in
+    /// on every settings load). A change rebuilds the rows of the artist
+    /// that is expanded right now, from the albums already held, put back in
+    /// the server's order first; the same value again does nothing.
+    pub fn set_grouping(&mut self, grouped: bool, artists: &[ArtistUIViewData]) {
+        if self.group_by_release_type == grouped {
+            return;
+        }
+        self.group_by_release_type = grouped;
+        let Some(artist_id) = self.expansion.expanded_id.clone() else {
+            return;
+        };
+        let mut albums: Vec<AlbumUIViewData> = std::mem::take(&mut self.expansion.children)
+            .into_iter()
+            .flat_map(|row| match row {
+                DiscographyRow::Album(album) => vec![album],
+                DiscographyRow::Section(header) => header.hidden,
+            })
+            .collect();
+        let place = |album: &AlbumUIViewData| {
+            self.server_order
+                .iter()
+                .position(|id| *id == album.id)
+                .unwrap_or(usize::MAX)
+        };
+        albums.sort_by_key(place);
+        self.expansion.children =
+            discography::build_rows(albums, &artist_id, grouped, &self.collapsed_sections);
+        // Every child row moved: positions held by the selection, the focus
+        // marker and (past the new end) the viewport no longer name them.
+        self.common
+            .settle_after_shrink(self.expansion.flattened_len(artists));
     }
 
     /// Convert sort mode to API string for server requests.

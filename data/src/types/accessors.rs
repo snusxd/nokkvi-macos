@@ -144,6 +144,8 @@ mod tests {
             release_date: None,
             compilation: None,
             comment: None,
+            description: None,
+            external_url: None,
             starred: None,
             starred_at: None,
             rating: None,
@@ -208,6 +210,8 @@ mod tests {
             evaluated_at: None,
             path: String::new(),
             sync: false,
+            starred: None,
+            rating: None,
             image: Default::default(),
         };
         assert_eq!(<Playlist as Named>::display_name(&playlist), "My Playlist");
@@ -283,6 +287,8 @@ mod tests {
             release_date: None,
             compilation: None,
             comment: None,
+            description: None,
+            external_url: None,
             starred: None,
             starred_at: None,
             rating: None,

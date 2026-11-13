@@ -26,6 +26,13 @@ pub struct ExpansionState<C: Clone> {
     pub children: Vec<C>,
     /// Slot List offset before expansion, for restoring on collapse
     pub parent_offset: usize,
+    /// The parent whose children were asked for and have not landed yet:
+    /// set when an expand asks for a load, dropped by a collapse, a clear or
+    /// the next expand. A load that lands for any other parent is late (the
+    /// user closed that row, opened another, or re-sorted the list) and is
+    /// dropped by [`Self::takes_children`] instead of re-opening a row the
+    /// user left.
+    awaiting: Option<String>,
 }
 
 impl<C: Clone> Default for ExpansionState<C> {
@@ -34,6 +41,7 @@ impl<C: Clone> Default for ExpansionState<C> {
             expanded_id: None,
             children: Vec::new(),
             parent_offset: 0,
+            awaiting: None,
         }
     }
 }
@@ -42,6 +50,19 @@ impl<C: Clone> ExpansionState<C> {
     /// Whether any item is currently expanded
     pub fn is_expanded(&self) -> bool {
         self.expanded_id.is_some()
+    }
+
+    /// Note that `parent_id`'s children are on their way (an expand asked
+    /// for them), so their load is taken when it lands.
+    pub fn await_children(&mut self, parent_id: &str) {
+        self.awaiting = Some(parent_id.to_string());
+    }
+
+    /// Whether a children load for `parent_id` still has a row to land in:
+    /// the parent the last expand asked for, or the one already open (a
+    /// refetch of its rows). Anything else is a late answer.
+    pub fn takes_children(&self, parent_id: &str) -> bool {
+        self.awaiting.as_deref() == Some(parent_id) || self.is_expanded_parent(parent_id)
     }
 
     /// Store loaded children for the given parent
@@ -53,6 +74,7 @@ impl<C: Clone> ExpansionState<C> {
         common: &mut SlotListPageState,
     ) {
         self.expanded_id = Some(parent_id);
+        self.awaiting = None;
         self.children = children;
         // Clear stale click-to-focus selection state so that
         // `has_multi_selection` returns to false and the center-slot
@@ -307,6 +329,7 @@ impl<C: Clone> ExpansionState<C> {
             .as_ref()
             .and_then(|id| parents.iter().position(|p| id_fn(p) == id));
         self.expanded_id = None;
+        self.awaiting = None;
         self.children.clear();
         if let Some(idx) = parent_idx {
             common.handle_set_offset(idx, parents.len());
@@ -316,6 +339,7 @@ impl<C: Clone> ExpansionState<C> {
     /// Silently clear expansion state (for sort/search/viewtype changes that reload data)
     pub fn clear(&mut self) {
         self.expanded_id = None;
+        self.awaiting = None;
         self.children.clear();
     }
 
@@ -450,6 +474,7 @@ impl<C: Clone> ExpansionState<C> {
                 if let Some(orig_idx) = parents.iter().position(|p| id_fn(p) == pid) {
                     self.parent_offset = common.slot_list.viewport_offset;
                     common.handle_set_offset(orig_idx, parents.len());
+                    self.await_children(&pid);
                     return Some(pid);
                 }
                 return None;
@@ -458,7 +483,9 @@ impl<C: Clone> ExpansionState<C> {
         // Not expanded — expand the centered parent
         let parent = parents.get(center_idx)?;
         self.parent_offset = common.slot_list.viewport_offset;
-        Some(id_fn(parent).to_string())
+        let pid = id_fn(parent).to_string();
+        self.await_children(&pid);
+        Some(pid)
     }
 
     // ── Sort/search convenience methods ─────────────────────────────────
@@ -693,6 +720,9 @@ pub(crate) struct ChildAlbumRowOptions<M> {
     pub(crate) on_album_click: Option<M>,
     /// Only used when `show_artist` is set.
     pub(crate) on_artist_click: Option<M>,
+    /// Small tags after the album name (Artists: what the section header
+    /// doesn't say). Empty for a plain row.
+    pub(crate) title_tags: Vec<crate::widgets::slot_list::TitleTag>,
 }
 
 /// Render a child **album** row (used by Artists → Albums and Genres → Albums).
@@ -724,6 +754,7 @@ pub(crate) fn render_child_album_row<'a, M: Clone + 'a + 'static>(
         on_song_count_click,
         on_album_click,
         on_artist_click,
+        title_tags,
     } = opts;
     let style = ctx.slot_style(false, false, depth);
 
@@ -771,7 +802,7 @@ pub(crate) fn render_child_album_row<'a, M: Clone + 'a + 'static>(
     }
 
     content = content.push(
-        container(crate::widgets::slot_list::slot_list_text_column(
+        container(crate::widgets::slot_list::slot_list_text_column_tagged(
             crate::widgets::slot_list::SlotTextColumn {
                 title: album.name.clone(),
                 title_on_press: on_album_click,
@@ -787,6 +818,7 @@ pub(crate) fn render_child_album_row<'a, M: Clone + 'a + 'static>(
                 subtitle_size: ctx.metrics.subtitle_size,
                 is_bold: true,
             },
+            title_tags,
             style,
             name_portion + if show_artist { 20 } else { 0 },
         ))

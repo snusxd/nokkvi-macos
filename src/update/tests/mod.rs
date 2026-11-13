@@ -12,6 +12,7 @@ pub(super) fn sse_slot_guard() -> crate::services::navidrome_sse::SlotTestGuard 
     crate::services::navidrome_sse::own_slot_for_test()
 }
 
+mod album_info;
 mod artist_info;
 mod artist_recs;
 mod artwork;
@@ -23,6 +24,7 @@ mod boat;
 mod components;
 mod cross_pane_drag;
 mod default_playlist_picker;
+mod discography;
 mod discord;
 mod dynamic_accent;
 mod editor;
@@ -49,6 +51,7 @@ mod notifications;
 mod page_loader;
 mod playback;
 mod playlist_artwork;
+mod playlist_favourites;
 mod playlists;
 mod queue;
 mod radio_artwork;

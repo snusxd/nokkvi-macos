@@ -3,47 +3,165 @@
 //! Handler for `ArtistsMessage`. View rendering lives in `view.rs`;
 //! types live in `mod.rs`.
 
+use std::collections::HashSet;
+
 use iced::Task;
 use nokkvi_data::{
     backend::{albums::AlbumUIViewData, artists::ArtistUIViewData},
-    types::{ItemKind, batch::BatchItem, info_modal::InfoModalItem, trawl::TrawlSeed},
+    types::{
+        ItemKind,
+        batch::{BatchItem, BatchPayload},
+        discography::DiscographyGroup,
+        info_modal::InfoModalItem,
+        trawl::TrawlSeed,
+    },
 };
 
-use super::{super::expansion::SlotListEntry, ArtistsAction, ArtistsMessage, ArtistsPage};
+use super::{
+    super::expansion::SlotListEntry, ArtistsAction, ArtistsMessage, ArtistsPage, DiscographyRow,
+    discography,
+};
 use crate::widgets::context_menu::LibraryContextEntry;
 
-type ArtistsRow<'a> = SlotListEntry<&'a ArtistUIViewData, &'a AlbumUIViewData>;
+type ArtistsRow<'a> = SlotListEntry<&'a ArtistUIViewData, &'a DiscographyRow>;
+
+/// What a batch action takes from the rows it was given: an artist, or an
+/// album. A section header stands for its albums, so it never appears here.
+enum BatchTarget<'a> {
+    Artist(&'a ArtistUIViewData),
+    Album(&'a AlbumUIViewData),
+}
+
+/// What folded or unfolded a section: Shift+Enter on the focused header, or
+/// a click on a header's chevron.
+#[derive(Clone, Copy)]
+enum FoldBy {
+    Key,
+    Click,
+}
 
 impl ArtistsPage {
-    /// What a row stands for in a play / queue / playlist batch.
-    fn batch_item(row: ArtistsRow<'_>) -> BatchItem {
-        match row {
-            SlotListEntry::Parent(artist) => BatchItem::Artist(artist.id.clone()),
-            SlotListEntry::Child(album, _) => BatchItem::Album(album.id.clone()),
+    /// What `rows` stand for in a play / queue / playlist / mix batch, in
+    /// display order. A section header stands for the albums of its section
+    /// (folded or not), and an album reached twice, as its own row and under
+    /// its header, counts once.
+    fn batch_targets<'a>(
+        &'a self,
+        rows: impl Iterator<Item = ArtistsRow<'a>>,
+    ) -> Vec<BatchTarget<'a>> {
+        let mut seen_albums: HashSet<&str> = HashSet::new();
+        let mut targets = Vec::new();
+        for row in rows {
+            match row {
+                SlotListEntry::Parent(artist) => targets.push(BatchTarget::Artist(artist)),
+                SlotListEntry::Child(DiscographyRow::Album(album), _) => {
+                    if seen_albums.insert(&album.id) {
+                        targets.push(BatchTarget::Album(album));
+                    }
+                }
+                SlotListEntry::Child(DiscographyRow::Section(header), _) => {
+                    let rows = &self.expansion.children;
+                    for album in discography::albums_of_group(rows, header.group) {
+                        if seen_albums.insert(&album.id) {
+                            targets.push(BatchTarget::Album(album));
+                        }
+                    }
+                }
+            }
+        }
+        targets
+    }
+
+    /// The batch `rows` stand for (see [`Self::batch_targets`]).
+    fn batch_payload<'a>(&'a self, rows: impl Iterator<Item = ArtistsRow<'a>>) -> BatchPayload {
+        self.batch_targets(rows)
+            .into_iter()
+            .map(|target| match target {
+                BatchTarget::Artist(artist) => BatchItem::Artist(artist.id.clone()),
+                BatchTarget::Album(album) => BatchItem::Album(album.id.clone()),
+            })
+            .collect()
+    }
+
+    /// The Trawl seeds `rows` add to the crate (see [`Self::batch_targets`]).
+    fn trawl_seeds<'a>(&'a self, rows: impl Iterator<Item = ArtistsRow<'a>>) -> Vec<TrawlSeed> {
+        self.batch_targets(rows)
+            .into_iter()
+            .map(|target| match target {
+                BatchTarget::Artist(artist) => {
+                    TrawlSeed::from_artist(artist.id.clone(), artist.name.clone())
+                }
+                BatchTarget::Album(album) => TrawlSeed::from_album(
+                    album.id.clone(),
+                    album.name.clone(),
+                    album.artist.clone(),
+                ),
+            })
+            .collect()
+    }
+
+    /// The albums of section `group` as a batch, in list order.
+    fn section_payload(&self, group: DiscographyGroup) -> BatchPayload {
+        discography::albums_of_group(&self.expansion.children, group)
+            .map(|album| BatchItem::Album(album.id.clone()))
+            .collect()
+    }
+
+    /// Fold or unfold the release-type section whose header is the flattened
+    /// row `flat_idx` (anything else is left alone), and remember the choice
+    /// for the session by section kind.
+    ///
+    /// The viewport offset stays put, so the header keeps its place on
+    /// screen while the rows under it come or go. Those rows changed
+    /// position, so the selection is dropped, and the focus is left on the
+    /// header: as a click's marker after a chevron click, and still as the
+    /// find-and-expand pin when the key folded a pinned header, so the keys
+    /// go on walking the list a row at a time.
+    fn toggle_section(&mut self, flat_idx: usize, artists: &[ArtistUIViewData], by: FoldBy) {
+        let keep_pin = match by {
+            FoldBy::Key => self.common.slot_list.selected_offset_pinned,
+            // A click ends a pin, as everywhere else.
+            FoldBy::Click => false,
+        };
+        let Some(child_idx) = self
+            .expansion
+            .child_ordinal_at(flat_idx, artists, |a| &a.id)
+        else {
+            return;
+        };
+        let Some((group, collapsed)) =
+            discography::toggle_section(&mut self.expansion.children, child_idx)
+        else {
+            return;
+        };
+        if collapsed {
+            self.collapsed_sections.insert(group);
+        } else {
+            self.collapsed_sections.remove(&group);
+        }
+        let total = self.expansion.flattened_len(artists);
+        self.common.settle_after_shrink(total);
+        if keep_pin {
+            self.common.slot_list.pin_selected(flat_idx, total);
+        } else if self.common.get_center_item_index(total) != Some(flat_idx) {
+            // The header sits away from the viewport's centre: mark it the
+            // way a plain click does.
+            self.common
+                .handle_slot_click(flat_idx, total, iced::keyboard::Modifiers::default());
         }
     }
 
-    /// The Trawl seed a row adds to the crate.
-    fn trawl_seed(row: ArtistsRow<'_>) -> TrawlSeed {
-        match row {
-            SlotListEntry::Parent(artist) => {
-                TrawlSeed::from_artist(artist.id.clone(), artist.name.clone())
-            }
-            SlotListEntry::Child(album, _) => {
-                TrawlSeed::from_album(album.id.clone(), album.name.clone(), album.artist.clone())
-            }
-        }
-    }
-
-    /// The rows a batch menu entry acts on: the selection when the clicked
+    /// The batch a row-menu entry acts on: the selection when the clicked
     /// row is part of it, else the clicked row alone (clears the selection).
-    fn menu_targets<'a>(
-        &'a mut self,
-        clicked_idx: usize,
-        artists: &'a [ArtistUIViewData],
-    ) -> impl Iterator<Item = ArtistsRow<'a>> + 'a {
+    fn menu_payload(&mut self, clicked_idx: usize, artists: &[ArtistUIViewData]) -> BatchPayload {
         let targets = self.common.get_batch_target_indices(clicked_idx);
-        self.expansion.rows_at(targets, artists, |a| &a.id)
+        self.batch_payload(self.expansion.rows_at(targets, artists, |a| &a.id))
+    }
+
+    /// [`Self::menu_payload`] as Trawl seeds.
+    fn menu_seeds(&mut self, clicked_idx: usize, artists: &[ArtistUIViewData]) -> Vec<TrawlSeed> {
+        let targets = self.common.get_batch_target_indices(clicked_idx);
+        self.trawl_seeds(self.expansion.rows_at(targets, artists, |a| &a.id))
     }
 
     /// Resolve a row-menu click on flattened row `clicked_idx`. Batch entries
@@ -58,40 +176,31 @@ impl ArtistsPage {
         use LibraryContextEntry as Entry;
         let row = self.expansion.get_entry_at(clicked_idx, artists, |a| &a.id);
         match (entry, row) {
-            (Entry::ShufflePlay, _) => ArtistsAction::PlayBatch(
-                self.menu_targets(clicked_idx, artists)
-                    .map(Self::batch_item)
-                    .collect(),
-                true,
-            ),
-            (Entry::AddToQueue, _) => ArtistsAction::AddBatchToQueue(
-                self.menu_targets(clicked_idx, artists)
-                    .map(Self::batch_item)
-                    .collect(),
-            ),
-            (Entry::AddToPlaylist, _) => ArtistsAction::AddBatchToPlaylist(
-                self.menu_targets(clicked_idx, artists)
-                    .map(Self::batch_item)
-                    .collect(),
-            ),
-            (Entry::AddToMix, _) => ArtistsAction::AddBatchToMix(
-                self.menu_targets(clicked_idx, artists)
-                    .map(Self::trawl_seed)
-                    .collect(),
-            ),
+            (Entry::ShufflePlay, _) => {
+                ArtistsAction::PlayBatch(self.menu_payload(clicked_idx, artists), true)
+            }
+            (Entry::AddToQueue, _) => {
+                ArtistsAction::AddBatchToQueue(self.menu_payload(clicked_idx, artists))
+            }
+            (Entry::AddToPlaylist, _) => {
+                ArtistsAction::AddBatchToPlaylist(self.menu_payload(clicked_idx, artists))
+            }
+            (Entry::AddToMix, _) => {
+                ArtistsAction::AddBatchToMix(self.menu_seeds(clicked_idx, artists))
+            }
             (Entry::GetInfo, Some(SlotListEntry::Parent(artist))) => {
                 ArtistsAction::ShowInfo(Box::new(InfoModalItem::from_artist_view_data(artist)))
             }
-            (Entry::GetInfo, Some(SlotListEntry::Child(album, _))) => {
+            (Entry::GetInfo, Some(SlotListEntry::Child(DiscographyRow::Album(album), _))) => {
                 ArtistsAction::ShowInfo(Box::new(InfoModalItem::from_album_view_data(album, None)))
             }
-            (Entry::ShowInFolder, Some(SlotListEntry::Child(album, _))) => {
+            (Entry::ShowInFolder, Some(SlotListEntry::Child(DiscographyRow::Album(album), _))) => {
                 ArtistsAction::ShowAlbumInFolder(album.id.clone())
             }
             (Entry::FindSimilar, Some(SlotListEntry::Parent(artist))) => {
                 ArtistsAction::FindSimilar(artist.id.clone(), artist.name.clone())
             }
-            (Entry::FindSimilar, Some(SlotListEntry::Child(album, _))) => {
+            (Entry::FindSimilar, Some(SlotListEntry::Child(DiscographyRow::Album(album), _))) => {
                 ArtistsAction::FindSimilar(album.id.clone(), album.name.clone())
             }
             (Entry::TopSongs, Some(SlotListEntry::Parent(artist))) => {
@@ -103,16 +212,22 @@ impl ArtistsPage {
                     &artist.name,
                 ))
             }
-            (Entry::SimilarArtists, Some(SlotListEntry::Child(album, _))) => {
-                ArtistsAction::SimilarArtists(crate::views::ArtistRef::new(
-                    &album.artist_id,
-                    &album.artist,
-                ))
-            }
-            // An artist has no folder of its own, and album rows don't offer
-            // Top Songs; the rest are other views' entries.
+            (
+                Entry::SimilarArtists,
+                Some(SlotListEntry::Child(DiscographyRow::Album(album), _)),
+            ) => ArtistsAction::SimilarArtists(crate::views::ArtistRef::new(
+                &album.artist_id,
+                &album.artist,
+            )),
+            // An artist has no folder of its own, album rows don't offer Top
+            // Songs, and a section header offers only the batch entries; the
+            // rest are other views' entries.
             (Entry::ShowInFolder, Some(SlotListEntry::Parent(_)))
             | (Entry::TopSongs, Some(SlotListEntry::Child(..)))
+            | (
+                Entry::GetInfo | Entry::ShowInFolder | Entry::FindSimilar | Entry::SimilarArtists,
+                Some(SlotListEntry::Child(DiscographyRow::Section(_), _)),
+            )
             | (
                 Entry::GetInfo
                 | Entry::ShowInFolder
@@ -152,11 +267,22 @@ impl ArtistsPage {
                 .common
                 .get_center_item_index(total)
                 .and_then(|idx| self.expansion.get_entry_at(idx, artists, |a| &a.id));
-            if let Some(SlotListEntry::Child(album, _)) = center {
-                return (
-                    Task::none(),
-                    ArtistsAction::NavigateAndExpandAlbum(album.id.clone()),
-                );
+            let center_idx = self.common.get_center_item_index(total);
+            match center {
+                Some(SlotListEntry::Child(DiscographyRow::Album(album), _)) => {
+                    return (
+                        Task::none(),
+                        ArtistsAction::NavigateAndExpandAlbum(album.id.clone()),
+                    );
+                }
+                // On a section header Shift+Enter folds or unfolds the section.
+                Some(SlotListEntry::Child(DiscographyRow::Section(_), _)) => {
+                    if let Some(flat_idx) = center_idx {
+                        self.toggle_section(flat_idx, artists, FoldBy::Key);
+                    }
+                    return (Task::none(), ArtistsAction::None);
+                }
+                Some(SlotListEntry::Parent(_)) | None => {}
             }
         }
 
@@ -165,7 +291,7 @@ impl ArtistsPage {
             id_fn: |a| &a.id,
             expand_center: ArtistsMessage::ExpandCenter => ArtistsAction::ExpandArtist,
             collapse: ArtistsMessage::CollapseExpansion,
-            children_loaded: ArtistsMessage::AlbumsLoaded,
+            children_loaded: ArtistsMessage::AlbumsLoaded => |id, albums| self.rows_for_loaded(&id, albums),
             sort_selected: ArtistsMessage::SortModeSelected => ArtistsAction::SortModeChanged,
             toggle_sort: ArtistsMessage::ToggleSortOrder => ArtistsAction::SortOrderChanged,
             search_changed: ArtistsMessage::SearchQueryChanged => ArtistsAction::SearchChanged,
@@ -178,9 +304,16 @@ impl ArtistsPage {
                     self.expansion.parent_index_at(row_idx, artists, |a| &a.id).to_string(),
                     force,
                 ),
-                SlotListEntry::Child(album, _) => ArtistsAction::PlayAlbum(album.id.clone(), force),
+                SlotListEntry::Child(DiscographyRow::Album(album), _) => {
+                    ArtistsAction::PlayAlbum(album.id.clone(), force)
+                }
+                // A header plays its section like a multi-selection: in list
+                // order, added instead from the split view's library pane.
+                SlotListEntry::Child(DiscographyRow::Section(header), _) => {
+                    ArtistsAction::PlaySelection(self.section_payload(header.group), force)
+                }
             },
-            batch_item: Self::batch_item,
+            batch: |rows| self.batch_payload(rows),
             play_selection: ArtistsAction::PlaySelection,
             add_to_queue: ArtistsAction::AddBatchToQueue,
             refresh: ArtistsAction::RefreshViewData,
@@ -224,7 +357,7 @@ impl ArtistsPage {
                 ArtistsMessage::ClickSetRating(item_index, rating) => {
                     use nokkvi_data::utils::formatters::compute_rating_toggle;
                     match self.expansion.get_entry_at(item_index, artists, |a| &a.id) {
-                        Some(SlotListEntry::Child(album, _)) => {
+                        Some(SlotListEntry::Child(DiscographyRow::Album(album), _)) => {
                             let current = album.rating.unwrap_or(0) as usize;
                             let new_rating = compute_rating_toggle(current, rating);
                             (
@@ -248,12 +381,15 @@ impl ArtistsPage {
                                 ),
                             )
                         }
-                        None => (Task::none(), ArtistsAction::None),
+                        // A section header carries no rating.
+                        Some(SlotListEntry::Child(DiscographyRow::Section(_), _)) | None => {
+                            (Task::none(), ArtistsAction::None)
+                        }
                     }
                 }
                 ArtistsMessage::ClickToggleStar(item_index) => {
                     match self.expansion.get_entry_at(item_index, artists, |a| &a.id) {
-                        Some(SlotListEntry::Child(album, _)) => (
+                        Some(SlotListEntry::Child(DiscographyRow::Album(album), _)) => (
                             Task::none(),
                             ArtistsAction::ToggleStar(
                                 album.id.clone(),
@@ -269,13 +405,20 @@ impl ArtistsPage {
                                 !artist.is_starred,
                             ),
                         ),
-                        None => (Task::none(), ArtistsAction::None),
+                        // A section header carries no heart.
+                        Some(SlotListEntry::Child(DiscographyRow::Section(_), _)) | None => {
+                            (Task::none(), ArtistsAction::None)
+                        }
                     }
                 }
                 ArtistsMessage::ContextMenuAction(clicked_idx, entry) => (
                     Task::none(),
                     self.context_menu_action(clicked_idx, entry, artists),
                 ),
+                ArtistsMessage::ToggleSection(flat_idx) => {
+                    self.toggle_section(flat_idx, artists, FoldBy::Click);
+                    (Task::none(), ArtistsAction::None)
+                }
                 // Routed up to root in `handle_artists` before this match runs.
                 ArtistsMessage::SetOpenMenu(_)
                 | ArtistsMessage::Roulette

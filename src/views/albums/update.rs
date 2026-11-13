@@ -148,7 +148,7 @@ impl AlbumsPage {
             id_fn: |a| &a.id,
             expand_center: AlbumsMessage::ExpandCenter => AlbumsAction::ExpandAlbum,
             collapse: AlbumsMessage::CollapseExpansion,
-            children_loaded: AlbumsMessage::TracksLoaded,
+            children_loaded: AlbumsMessage::TracksLoaded => |id, tracks| tracks,
             sort_selected: AlbumsMessage::SortModeSelected => AlbumsAction::SortModeChanged,
             toggle_sort: AlbumsMessage::ToggleSortOrder => AlbumsAction::SortOrderChanged,
             search_changed: AlbumsMessage::SearchQueryChanged => AlbumsAction::SearchChanged,
@@ -169,7 +169,7 @@ impl AlbumsPage {
                     force,
                 ),
             },
-            batch_item: Self::batch_item,
+            batch: |rows| rows.map(Self::batch_item).collect(),
             play_selection: AlbumsAction::PlaySelection,
             add_to_queue: AlbumsAction::AddBatchToQueue,
             refresh: AlbumsAction::RefreshViewData,
@@ -290,6 +290,7 @@ impl AlbumsPage {
                 AlbumsMessage::ArtworkLoaded(_, _)
                 | AlbumsMessage::LargeArtworkLoaded(_, _)
                 // Routed up to root in `handle_albums` before this match runs.
+                | AlbumsMessage::OpenExternalUrl(_)
                 | AlbumsMessage::SetOpenMenu(_)
                 | AlbumsMessage::Roulette
                 | AlbumsMessage::ArtworkColumnDrag(_)

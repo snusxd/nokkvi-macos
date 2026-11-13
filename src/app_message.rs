@@ -461,6 +461,8 @@ pub enum HotkeyMessage {
     AlbumStarredStatusUpdated(String, bool),
     /// Update starred status locally for artist (artist_id, new_starred_status)
     ArtistStarredStatusUpdated(String, bool),
+    /// Update starred status locally for a playlist (playlist_id, new_starred_status)
+    PlaylistStarredStatusUpdated(String, bool),
 
     /// Add centered album/song to queue (Shift+A)
     AddToQueue,
@@ -481,6 +483,11 @@ pub enum HotkeyMessage {
     /// Update album rating locally (album_id, new_rating)
     AlbumRatingUpdated(String, u32),
     ArtistRatingUpdated(String, u32),
+    /// Update playlist rating locally (playlist_id, new_rating)
+    PlaylistRatingUpdated(String, u32),
+    /// The server took nokkvi's star or rating on a playlist (playlist_id).
+    /// The list reloads only under a sort that orders by it.
+    PlaylistAnnotated(String),
     /// Expand/collapse center item inline (Shift+Enter)
     ExpandCenter,
     /// Move centered queue track up (Shift+↑)
@@ -587,6 +594,15 @@ pub enum ArtworkMessage {
     Loaded(String, Option<String>, MiniArt),
     LargeLoaded(String, Option<image::Handle>),
     LargeArtistLoaded(String, Option<image::Handle>),
+    /// The full-size cover staged for `id` (`ArtworkState::large_staging`,
+    /// the handle `handle_id`) is on the GPU, `allocation` holding it there,
+    /// or with `None` could not be put there (a decode error, no window
+    /// open): either way the panel is given it now.
+    LargeStaged {
+        id: String,
+        handle_id: iced::advanced::image::Id,
+        allocation: Option<image::Allocation>,
+    },
     LoadLarge(String),
     /// A navigation step in `source`'s list (`None`: the Similar tab, as in
     /// `Nokkvi::current_target_view`) centred a row: its big panel cover is
@@ -1311,6 +1327,18 @@ pub enum AlbumsLoaderMessage {
         result: Result<Vec<nokkvi_data::backend::albums::AlbumUIViewData>, String>,
         total_count: usize,
     },
+    /// A `getAlbumInfo2` answer for `album_id`, fetched when the album was
+    /// centred. `generation` is the session counter it was dispatched under
+    /// (see `AlbumInfoState`). A rejected session never arrives here: it is
+    /// routed to `Message::SessionExpired`.
+    InfoLoaded {
+        generation: u64,
+        album_id: String,
+        result: Result<nokkvi_data::types::album::AlbumInfo, String>,
+    },
+    /// An album's settle timer fired; its info is asked for only if it is
+    /// still the album centred last.
+    InfoSettled(String),
 }
 
 // --- Artists Loader --------------------------------------------------------
@@ -1397,14 +1425,16 @@ pub enum GenresLoaderMessage {
 // --- Playlists Loader ------------------------------------------------------
 
 /// Playlists loader results — single-shot full-list response (playlists are
-/// not paged). `(result, total_count, replace)`; `replace` as on
-/// `AlbumsLoaderMessage::Loaded`.
+/// not paged). `(result, total_count, replace, background)`; `replace` as on
+/// `AlbumsLoaderMessage::Loaded`; `background` marks a reload the user
+/// didn't ask for, which keeps the viewport and the highlight on their row.
 #[derive(Debug, Clone)]
 pub enum PlaylistsLoaderMessage {
     Loaded(
         Result<Vec<nokkvi_data::backend::playlists::PlaylistUIViewData>, String>,
         usize,
         Option<nokkvi_data::types::paged_buffer::ReplaceTicket>,
+        bool,
     ),
 }
 
