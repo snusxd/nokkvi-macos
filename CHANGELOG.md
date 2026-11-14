@@ -21,6 +21,9 @@ All notable changes to this project will be documented in this file.
 - The macOS app icon now sits on a dark graphite plate, with neutral greys in place of the teal tint.
 - On macOS, the hotkeys that defaulted to Ctrl, like Shuffle Play and Roulette, now default to Cmd.
 - On macOS, Cmd+click replaces Ctrl+click for selecting several rows.
+- A paused or stopped visualizer now holds still once its bars have fallen, so an idle nokkvi uses almost no CPU.
+- The Harbour sea pauses while nothing plays and the window is unfocused or untouched for a minute, and resumes where it stopped.
+- While paused, long now-playing titles rest at their start instead of scrolling; hovering one scrolls it.
 
 ### Fixed
 
