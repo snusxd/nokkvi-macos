@@ -1882,7 +1882,6 @@ impl Nokkvi {
             harbour_scene: _,
             cover_beat: _,
             idle: _,
-            glow_epoch: _,
             mpris_connection: _,
             notification_connection: _,
             tray_connection: _,

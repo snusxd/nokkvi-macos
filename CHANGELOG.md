@@ -24,11 +24,14 @@ All notable changes to this project will be documented in this file.
 - A paused or stopped visualizer now holds still once its bars have fallen, so an idle nokkvi uses almost no CPU.
 - The Harbour sea pauses while nothing plays and the window is unfocused or untouched for a minute, and resumes where it stopped.
 - While paused, long now-playing titles rest at their start instead of scrolling; hovering one scrolls it.
+- Playing music now uses a fraction of the CPU it did, since the seek bar and now-playing glow no longer redraw the whole window every frame.
+- The Harbour scene animates at 60 fps on high-refresh displays, which cuts its CPU use while music plays.
 
 ### Fixed
 
 - Letter and punctuation hotkeys now work on non-Latin keyboard layouts such as Russian.
 - Number-row hotkeys now work on layouts like AZERTY, where that row types symbols without Shift.
+- Leaving the Harbour view with the visualizer off now stops the background audio analysis it had started.
 
 ### Removed
 
