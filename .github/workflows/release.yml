@@ -129,6 +129,15 @@ jobs:
       - name: Bundle Nokkvi.app
         run: ./scripts/bundle-macos.sh --no-build
 
+      # The Intel runner's disk is too small to hold the release target dir
+      # and an uncompressed DMG image; drop the intermediates once the
+      # bundle has its binary.
+      - name: Free disk space
+        run: |
+          df -h .
+          rm -rf target/release/deps target/release/build target/release/incremental target/debug
+          df -h .
+
       - name: Package DMG and ZIP
         env:
           TRIPLE: ${{ matrix.target }}
