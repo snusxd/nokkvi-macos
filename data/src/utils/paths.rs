@@ -13,6 +13,9 @@
 //!
 //! Artwork is fetched on demand from the Navidrome server — there is no client-side
 //! cache directory.
+//!
+//! A test build keeps all of it under a per-process temp root instead
+//! ([`TEST_DIRS`]), so the suite never touches the files of whoever runs it.
 
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
@@ -29,6 +32,133 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
 const APP_NAME: &str = "nokkvi";
+
+/// Whether this build keeps every app dir (config, state, data, cache) under a
+/// per-process temp root instead of the user's real XDG dirs.
+///
+/// True in test builds only: this crate's own tests (`cfg(test)`), and the UI
+/// crate's, whose dev-dependency turns on the `hermetic-test-dirs` feature.
+/// The suite used to read the runner's `config.debug.toml` and write it back
+/// (it dropped `[views]` and `[hotkeys]` and stripped `[settings]` values on
+/// every run) and to open the real `app.redb`.
+///
+/// Never true in a release build, whatever the features say, and the app's
+/// `main` refuses to start when it is: only a test harness may run this way.
+pub const TEST_DIRS: bool = cfg!(any(
+    test,
+    all(feature = "hermetic-test-dirs", debug_assertions)
+));
+
+/// The per-user roots the app dirs hang off.
+#[derive(Clone, Copy)]
+enum Root {
+    Config,
+    State,
+    Data,
+    Cache,
+}
+
+/// One of the per-user roots: from the XDG Base Directory Specification
+/// (through `directories`), or under the test root in a test build
+/// ([`TEST_DIRS`]), laid out like a home dir so a path still reads
+/// `.config/nokkvi`, `.local/state/nokkvi`, ...
+fn root_dir(root: Root) -> Result<PathBuf> {
+    if TEST_DIRS {
+        return Ok(test_dirs::root().join(match root {
+            Root::Config => ".config",
+            Root::State => ".local/state",
+            Root::Data => ".local/share",
+            Root::Cache => ".cache",
+        }));
+    }
+    let base_dirs = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+    Ok(match root {
+        Root::Config => base_dirs.config_dir(),
+        // A platform with no state dir (`directories` has one only on Linux)
+        // falls back to the local data dir.
+        Root::State => base_dirs
+            .state_dir()
+            .unwrap_or_else(|| base_dirs.data_local_dir()),
+        Root::Data => base_dirs.data_dir(),
+        Root::Cache => base_dirs.cache_dir(),
+    }
+    .to_path_buf())
+}
+
+/// The per-process temp root test builds keep their app dirs under. Compiled
+/// into every build so both halves of [`root_dir`] are always checked; only
+/// reached when [`TEST_DIRS`] is true.
+mod test_dirs {
+    use std::{
+        path::{Path, PathBuf},
+        sync::OnceLock,
+        time::{Duration, SystemTime},
+    };
+
+    /// `<temp dir>/nokkvi-test-<pid>`: one per test process, so two suites
+    /// running at once never share a config file or a database.
+    const PREFIX: &str = "nokkvi-test-";
+
+    /// Where no pid can be probed, a leftover root this old is dead: no test
+    /// process runs for hours.
+    const STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
+
+    /// This process's root, empty on first use. Leftovers of finished test
+    /// processes are removed on the way: nothing runs at exit to do it.
+    pub(super) fn root() -> &'static Path {
+        static ROOT: OnceLock<PathBuf> = OnceLock::new();
+        ROOT.get_or_init(|| {
+            let tmp = std::env::temp_dir();
+            remove_dead_roots(&tmp);
+            let root = tmp.join(format!("{PREFIX}{}", std::process::id()));
+            // A leftover under this very pid (the pid was reused): start empty.
+            remove_root(&root);
+            root
+        })
+    }
+
+    fn remove_dead_roots(tmp: &Path) {
+        let Ok(entries) = std::fs::read_dir(tmp) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(PREFIX))
+                .and_then(|pid| pid.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if pid != std::process::id() && owner_is_gone(pid, &entry.path()) {
+                remove_root(&entry.path());
+            }
+        }
+    }
+
+    /// Linux asks procfs whether the pid still runs; elsewhere the root's age
+    /// decides.
+    fn owner_is_gone(pid: u32, root: &Path) -> bool {
+        if cfg!(target_os = "linux") {
+            return !Path::new(&format!("/proc/{pid}")).exists();
+        }
+        root.metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age > STALE_AFTER)
+    }
+
+    /// Best effort: another test process may be removing the same leftover.
+    fn remove_root(root: &Path) {
+        if let Err(e) = std::fs::remove_dir_all(root)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::debug!("could not remove the test dir {}: {e}", root.display());
+        }
+    }
+}
 
 /// Config filename. Debug builds use a separate file so `cargo run` against a
 /// dev build doesn't clobber the user's real `config.toml` (server creds,
@@ -235,10 +365,7 @@ fn edit_toml_file(
 ///
 /// Holds user-editable configuration: `config.toml`, `themes/`, `sfx/`.
 pub(crate) fn get_app_dir() -> Result<PathBuf> {
-    let base_dirs = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-
-    let app_dir = base_dirs.config_dir().join(APP_NAME);
+    let app_dir = root_dir(Root::Config)?.join(APP_NAME);
 
     if !app_dir.exists() {
         std::fs::create_dir_all(&app_dir).context(format!(
@@ -257,13 +384,7 @@ pub(crate) fn get_app_dir() -> Result<PathBuf> {
 /// `$XDG_STATE_HOME` is the right home for this kind of persisted-but-not-
 /// portable data.
 pub(crate) fn get_state_dir() -> Result<PathBuf> {
-    let base_dirs = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-
-    let state_dir = base_dirs
-        .state_dir()
-        .unwrap_or_else(|| base_dirs.data_local_dir())
-        .join(APP_NAME);
+    let state_dir = root_dir(Root::State)?.join(APP_NAME);
 
     if !state_dir.exists() {
         std::fs::create_dir_all(&state_dir).context(format!(
@@ -281,10 +402,7 @@ pub(crate) fn get_state_dir() -> Result<PathBuf> {
 /// Base Directory Specification this is `$XDG_DATA_HOME`, distinct from config
 /// (`~/.config`) and state (`~/.local/state`).
 pub(crate) fn get_data_dir() -> Result<PathBuf> {
-    let base_dirs = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-
-    let data_dir = base_dirs.data_dir().join(APP_NAME);
+    let data_dir = root_dir(Root::Data)?.join(APP_NAME);
 
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir).context(format!(
@@ -320,9 +438,7 @@ pub fn get_lyrics_dir() -> Result<PathBuf> {
 /// envelopes. Per the XDG Base Directory Specification this is
 /// `$XDG_CACHE_HOME`; deleting it costs only a re-scan.
 pub fn get_cache_dir() -> Result<PathBuf> {
-    let base_dirs = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-    Ok(base_dirs.cache_dir().join(APP_NAME))
+    Ok(root_dir(Root::Cache)?.join(APP_NAME))
 }
 
 /// Get the credentials config file path (`~/.config/nokkvi/config.toml`,
@@ -427,10 +543,29 @@ pub fn migrate_to_state_dir() {
     let Ok(state_dir) = get_state_dir() else {
         return;
     };
-    if config_dir == state_dir {
+    migrate_between(&config_dir, &state_dir);
+}
+
+/// Whether two paths name one folder: equal as written, or equal once
+/// symlinks are resolved. A path that can't be resolved counts as its own
+/// folder.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// The body of [`migrate_to_state_dir`], on explicit dirs so a test can run it
+/// on scratch ones.
+fn migrate_between(config_dir: &Path, state_dir: &Path) {
+    // One dir for both (XDG_CONFIG_HOME and XDG_STATE_HOME pointed at the same
+    // folder, one symlinked to the other, or a platform with no state dir):
+    // nothing to move, and the "old" log is the one this launch already opened.
+    if same_dir(config_dir, state_dir) {
         return;
     }
-
     let old_db = config_dir.join("app.redb");
     let new_db = state_dir.join("app.redb");
     if old_db.exists() {
@@ -500,9 +635,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_migration_keeps_everything_when_config_and_state_share_a_dir() {
+        // XDG_CONFIG_HOME and XDG_STATE_HOME pointed at one folder: the "old"
+        // log is the live one, opened before the migration runs.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.redb"), b"db").unwrap();
+        std::fs::write(dir.path().join("nokkvi.log"), b"log").unwrap();
+        migrate_between(dir.path(), dir.path());
+        assert!(
+            dir.path().join("nokkvi.log").exists(),
+            "the live log was deleted"
+        );
+        assert!(dir.path().join("app.redb").exists());
+    }
+
+    #[test]
+    fn the_migration_keeps_the_log_when_the_state_dir_links_to_the_config_dir() {
+        // `~/.local/state/nokkvi` symlinked to `~/.config/nokkvi`: two paths,
+        // one folder, so the "old" log is again the live one.
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config");
+        std::fs::create_dir(&config).unwrap();
+        let state = root.path().join("state");
+        std::os::unix::fs::symlink(&config, &state).unwrap();
+        std::fs::write(config.join("app.redb"), b"db").unwrap();
+        std::fs::write(config.join("nokkvi.log"), b"log").unwrap();
+        migrate_between(&config, &state);
+        assert!(
+            config.join("nokkvi.log").exists(),
+            "the live log was deleted"
+        );
+        assert!(config.join("app.redb").exists());
+    }
+
+    #[test]
+    fn the_migration_moves_the_db_and_drops_the_old_log() {
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        std::fs::write(config.path().join("app.redb"), b"db").unwrap();
+        std::fs::write(config.path().join("nokkvi.log"), b"log").unwrap();
+        migrate_between(config.path(), state.path());
+        assert!(!config.path().join("app.redb").exists());
+        assert!(state.path().join("app.redb").exists());
+        assert!(!config.path().join("nokkvi.log").exists());
+    }
+
+    #[test]
+    fn every_app_dir_sits_under_this_process_temp_root() {
+        const { assert!(TEST_DIRS) };
+        let root = std::env::temp_dir().join(format!("nokkvi-test-{}", std::process::id()));
+        for dir in [
+            get_app_dir().unwrap(),
+            get_state_dir().unwrap(),
+            get_data_dir().unwrap(),
+            get_cache_dir().unwrap(),
+        ] {
+            assert!(
+                dir.starts_with(&root),
+                "{} is outside {}",
+                dir.display(),
+                root.display()
+            );
+        }
+        assert!(get_config_path().unwrap().starts_with(&root));
+        assert!(get_app_db_path().unwrap().starts_with(&root));
+    }
+
+    #[test]
     fn test_config_paths_under_config_dir() {
         let app_dir = get_app_dir().unwrap();
-        assert!(app_dir.ends_with("nokkvi"));
+        assert!(app_dir.to_string_lossy().contains(".config/nokkvi"));
 
         let config_path = get_config_path().unwrap();
         assert!(config_path.starts_with(&app_dir));
@@ -511,7 +713,7 @@ mod tests {
     #[test]
     fn test_state_paths_under_state_dir() {
         let state_dir = get_state_dir().unwrap();
-        assert!(state_dir.ends_with("nokkvi"));
+        assert!(state_dir.to_string_lossy().contains(".local/state/nokkvi"));
 
         let db_path = get_app_db_path().unwrap();
         assert!(db_path.starts_with(&state_dir));

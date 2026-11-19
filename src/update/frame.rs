@@ -59,17 +59,28 @@ fn step_lyrics_clock(app: &mut Nokkvi, now: Instant) {
 ///
 /// Synced: ease toward the active line at display refresh, smoothing the
 /// 100 ms position ticks into crossfade-tier motion. An in-flight glide
-/// settles to its target even while paused (the retarget only fires on real
-/// line changes, which don't happen while paused).
+/// settles to its target even while paused, and a paused seek's snap lands
+/// too: `frames_wanted` keeps frames coming until the published center
+/// reaches [`lyrics_center_target`].
 ///
 /// Plain: a pure function of the last tick's position, the track duration, the
 /// line count and the user's wheel offset — so it holds still while paused and
 /// jumps whole on a seek or a wheel notch.
 fn publish_lyrics_center(app: &Nokkvi, now: Instant) {
-    if !app.settings.lyrics_mode.is_active() || app.lyrics.matched_song_id.is_none() {
-        return;
+    if let Some(pos) = lyrics_center_target(app, now) {
+        crate::widgets::lyrics_viewport::set_lyrics_center(pos);
     }
-    let pos = if app.lyrics.doc.synced {
+}
+
+/// Where the lyrics column center belongs at `now`, or `None` with no sheet to
+/// place. [`publish_lyrics_center`] writes it; `frames_wanted` compares it with
+/// the published one, so a jump that arrives while no frame runs (a paused
+/// seek's snap, a wheel notch on a paused plain sheet) still gets its frame.
+fn lyrics_center_target(app: &Nokkvi, now: Instant) -> Option<f32> {
+    if !app.settings.lyrics_mode.is_active() || app.lyrics.matched_song_id.is_none() {
+        return None;
+    }
+    Some(if app.lyrics.doc.synced {
         crate::widgets::lyrics_viewport::eased_center(
             app.lyrics.scroll_from,
             app.lyrics.scroll_to,
@@ -86,8 +97,7 @@ fn publish_lyrics_center(app: &Nokkvi, now: Instant) {
             app.lyrics.doc.lines.len(),
             app.lyrics.drift_offset,
         )
-    };
-    crate::widgets::lyrics_viewport::set_lyrics_center(pos);
+    })
 }
 
 /// Frame pacing for the ambient Harbour scene: 60 fps.
@@ -103,6 +113,9 @@ pub(crate) enum FrameDemand {
     /// Something tracks the music or the hand: every display frame.
     Display,
 }
+/// How far (in lines) the published center may sit from its target and still
+/// count as landed: well under a pixel at any row height, above f32 noise.
+const LYRICS_CENTER_LANDED: f32 = 1e-3;
 
 impl Nokkvi {
     /// Whether the display-rate frame subscription (`iced::window::frames()`)
@@ -116,8 +129,9 @@ impl Nokkvi {
     /// bars have fallen), Theater Mode's chrome slides or is due to flip, the
     /// Harbour scene shows with the music playing or a present user (its sea
     /// breathes while paused, until the window loses focus or sits a minute
-    /// without input), a lyrics glide or dissolve is in flight, or a Cover
-    /// Beat swell is still settling. Everything else
+    /// without input), a lyrics glide or dissolve is in flight, the lyrics
+    /// column has a jump still to land (a paused seek), or a Cover Beat swell
+    /// is still settling. Everything else
     /// that animates (a hover wash, the centre flash, the marquee, the seek
     /// bar's and the scrollbar's fades, the roulette) requests its own frames,
     /// and the 10 Hz position tick redraws the rest. `subscription()` is
@@ -258,9 +272,11 @@ impl Nokkvi {
         sliding || flip_due
     }
 
-    /// A sheet dissolving out, or a synced sheet's glide still easing toward
-    /// its line (`eased_center` settles at `anim_duration_ms`; a snap has no
-    /// motion), with the layer drawn at all.
+    /// A sheet dissolving out, a synced sheet's glide still easing toward
+    /// its line (`eased_center` settles at `anim_duration_ms`), or a center
+    /// the frame tick has yet to publish: a snap has no motion, but while
+    /// paused with the visualizer off its one frame comes from here (the sheet
+    /// held the old line through every paused seek until playback resumed).
     fn lyrics_in_motion(&self, now: Instant) -> bool {
         if !self.settings.lyrics_mode.is_active() {
             return false;
@@ -268,12 +284,17 @@ impl Nokkvi {
         if self.lyrics.outgoing.is_some() || self.lyrics.arrival_progress(now).is_some() {
             return true;
         }
-        self.lyrics.matched_song_id.is_some()
+        let gliding = self.lyrics.matched_song_id.is_some()
             && self.lyrics.doc.synced
             && self.lyrics.anim_duration_ms > 0
             && self.lyrics.anim_start.is_some_and(|start| {
                 now.saturating_duration_since(start).as_millis()
                     < u128::from(self.lyrics.anim_duration_ms)
+            });
+        gliding
+            || lyrics_center_target(self, now).is_some_and(|target| {
+                (target - crate::widgets::lyrics_viewport::lyrics_center_pos()).abs()
+                    > LYRICS_CENTER_LANDED
             })
     }
 }

@@ -10,13 +10,9 @@
 
 /// `true` while a process with this PID exists, whoever owns it.
 ///
-/// Only `ESRCH` (no such process) reads as dead. `EPERM` means the process
-/// exists but belongs to another user (launchd or init as PID 1), and a
-/// seccomp filter or an SELinux/AppArmor policy can answer `EACCES` for every
-/// PID, our own included; both count as alive, so a sweep never removes a
-/// live sibling's files. PID 0 and PIDs past `i32::MAX`
-/// name no single process (`kill(0, …)` targets the caller's process group),
-/// so they read as dead.
+/// Only `ESRCH` (no such process) reads as dead; see [`alive_after_kill`].
+/// PID 0 and PIDs past `i32::MAX` name no single process (`kill(0, …)`
+/// targets the caller's process group), so they read as dead.
 pub(crate) fn pid_is_alive(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
@@ -27,12 +23,25 @@ pub(crate) fn pid_is_alive(pid: u32) -> bool {
     // SAFETY: signal 0 delivers nothing; `kill` only checks that `pid` exists
     // and that we may signal it. No memory is passed or retained.
     let rc = unsafe { libc::kill(pid, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    let errno = (rc != 0)
+        .then(|| std::io::Error::last_os_error().raw_os_error())
+        .flatten();
+    alive_after_kill(rc, errno)
+}
+
+/// What a `kill(pid, 0)` result says about `pid`. Only `ESRCH` means the
+/// process is gone. `EPERM` is a live process another user owns (init as
+/// PID 1), and any other errno is the probe being refused (a seccomp filter
+/// or an SELinux / AppArmor policy answering `EACCES`): reading that as dead
+/// would mark every PID dead, our own included, and the sweeps would delete
+/// a live sibling's art files and draft playlists.
+fn alive_after_kill(rc: i32, errno: Option<i32>) -> bool {
+    rc == 0 || errno != Some(libc::ESRCH)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::pid_is_alive;
+    use super::{alive_after_kill, pid_is_alive};
 
     #[test]
     fn own_pid_and_pid_1_are_alive() {
@@ -46,6 +55,20 @@ mod tests {
     fn pids_naming_no_single_process_are_dead() {
         assert!(!pid_is_alive(0), "kill(0, 0) would probe our process group");
         assert!(!pid_is_alive(u32::MAX), "past i32::MAX is no valid pid_t");
+    }
+
+    #[test]
+    fn only_esrch_reads_as_dead() {
+        assert!(alive_after_kill(0, None));
+        assert!(!alive_after_kill(-1, Some(libc::ESRCH)));
+        assert!(
+            alive_after_kill(-1, Some(libc::EPERM)),
+            "another user's process"
+        );
+        assert!(
+            alive_after_kill(-1, Some(libc::EACCES)),
+            "a refused probe must not mark a live sibling dead"
+        );
     }
 
     #[test]

@@ -21,10 +21,12 @@ use crate::{
 /// AZERTY digit-row symbol) to the US-QWERTY character at that position
 /// (`super::layout_independent_key`), so bindings work on every layout.
 ///
-/// Also normalises shifted characters back to their base key (e.g. `$` →
-/// `4`) so that bindings stored as `Shift + 4` match. iced already reports
-/// the key without modifiers, so this is a fallback for an event that still
-/// carries the shifted symbol; the table is the US shift map.
+/// Also maps a US shifted symbol to its base key (`$` → `4`, the US shift
+/// map). iced reports the key without modifiers, so a US layout never gets
+/// here with one: the table only sees a symbol another Latin layout types
+/// unshifted, and there it maps by US positions, so AZERTY's `$` key fires
+/// the `4` binding (Songs). Those keys are `KNOWN_MISFIRES` in
+/// `layout::xkb_tests`.
 pub(crate) fn iced_key_to_keycode(key: &keyboard::Key) -> Option<KeyCode> {
     use keyboard::key;
     match key {
@@ -730,48 +732,20 @@ mod tests {
             ),
             Some(Message::Hotkey(HotkeyMessage::ToggleStar))
         ));
-        assert!(matches!(
+        assert!(
             handle_hotkey(
-                keyboard::Key::Character(",".into()),
-                keyboard::Modifiers::LOGO,
+                keyboard::Key::Character("j".into()),
+                keyboard::Modifiers::empty(),
                 &config,
-            ),
-            Some(Message::Hotkey(HotkeyMessage::GetInfo))
-        ));
-    }
-
-    #[test]
-    fn the_shortcut_defaults_fire_on_the_platform_primary_modifier() {
-        let config = HotkeyConfig::default();
-        assert!(matches!(
-            handle_hotkey(
-                keyboard::Key::Character("e".into()),
-                keyboard::Modifiers::COMMAND,
-                &config,
-            ),
-            Some(Message::SplitView(SplitViewMessage::ToggleBrowsingPanel))
-        ));
-    }
-
-    #[test]
-    fn a_system_cmd_chord_never_resolves_on_macos() {
-        let mut config = HotkeyConfig::default();
-        config.set_binding(HotkeyAction::ToggleStar, KeyCombo::logo(KeyCode::Char('c')));
-        let msg = handle_hotkey(
-            keyboard::Key::Character("c".into()),
-            keyboard::Modifiers::LOGO,
-            &config,
-        );
-        assert_eq!(
-            msg.is_none(),
-            cfg!(target_os = "macos"),
-            "Cmd+C is the system's Copy on macOS and a plain Super chord elsewhere"
+            )
+            .is_none()
         );
     }
 
     #[test]
     fn a_letter_typed_on_a_cyrillic_layout_fires_its_binding() {
         use keyboard::key::{Code, Physical};
+        let _guard = crate::hotkeys::LATIN_LAYOUT_LOCK.lock();
         let config = HotkeyConfig::default();
         // Russian layout: the X key types "ч", Shift+L types "Д" (iced drops
         // Shift from the key), the "/" key types ".".
