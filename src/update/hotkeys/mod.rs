@@ -801,7 +801,9 @@ impl Nokkvi {
         // while the user is typing. Exceptions:
         //   - Escape: always allowed (close overlays, clear search)
         //   - Tab: always allowed (slot-list navigation)
-        //   - Ctrl/Cmd+key: always allowed (intentional shortcuts like Ctrl+S, ⌘S)
+        //   - Ctrl+key: always allowed (intentional shortcuts like Ctrl+S)
+        //   - Cmd+key on macOS (⌘S). Not Super elsewhere: Super+letter still
+        //     types the letter on Wayland, so it would both type and fire.
         //   - Shift+Tab / Shift+Backspace: allowed for the settings-sidebar
         //     category nav. The exception is scoped to these two named keys
         //     only — plain Shift+character (a capital letter while typing)
@@ -815,7 +817,12 @@ impl Nokkvi {
                         iced::keyboard::key::Named::Tab | iced::keyboard::key::Named::Backspace
                     )
                 );
-            if !is_escape && !is_tab && !modifiers.control() && !modifiers.logo() && !is_shift_nav {
+            if !is_escape
+                && !is_tab
+                && !modifiers.control()
+                && !(cfg!(target_os = "macos") && modifiers.logo())
+                && !is_shift_nav
+            {
                 return Task::none();
             }
         }

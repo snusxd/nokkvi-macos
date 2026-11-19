@@ -10,8 +10,11 @@
 
 /// `true` while a process with this PID exists, whoever owns it.
 ///
-/// `EPERM` means the process exists but belongs to another user (launchd or
-/// init as PID 1), so it counts as alive. PID 0 and PIDs past `i32::MAX`
+/// Only `ESRCH` (no such process) reads as dead. `EPERM` means the process
+/// exists but belongs to another user (launchd or init as PID 1), and a
+/// seccomp filter or an SELinux/AppArmor policy can answer `EACCES` for every
+/// PID, our own included; both count as alive, so a sweep never removes a
+/// live sibling's files. PID 0 and PIDs past `i32::MAX`
 /// name no single process (`kill(0, …)` targets the caller's process group),
 /// so they read as dead.
 pub(crate) fn pid_is_alive(pid: u32) -> bool {
@@ -24,7 +27,7 @@ pub(crate) fn pid_is_alive(pid: u32) -> bool {
     // SAFETY: signal 0 delivers nothing; `kill` only checks that `pid` exists
     // and that we may signal it. No memory is passed or retained.
     let rc = unsafe { libc::kill(pid, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 #[cfg(test)]

@@ -275,8 +275,9 @@ pub(crate) fn handle_hotkey(
 /// The logo modifier (Cmd on macOS, Super elsewhere) is part of the combo, so
 /// ⌘L and a bare L are different bindings and ⌘C never fires a bare `c`
 /// binding. The combos the OS owns (⌘C/V/X/A/Z, ⌘Q, ⌘W, … on macOS) never
-/// resolve (`KeyCombo::is_os_reserved`). Cmd+, opens Settings, the macOS
-/// convention, unless the user bound that combo to something else.
+/// resolve (`KeyCombo::is_os_reserved`). On macOS Cmd+, opens Settings, the
+/// platform convention, unless the user bound that combo to something else.
+/// Elsewhere an unbound Super chord resolves to nothing.
 pub(crate) fn resolve_action(
     key: &keyboard::Key,
     unnamed: Option<u32>,
@@ -285,7 +286,8 @@ pub(crate) fn resolve_action(
 ) -> Option<HotkeyAction> {
     let combo = key_combo(key_press_to_keycode(key, unnamed)?, modifiers);
     config.lookup_combo(&combo).or_else(|| {
-        (combo == KeyCombo::logo(KeyCode::Char(','))).then_some(HotkeyAction::SwitchToSettings)
+        (cfg!(target_os = "macos") && combo == KeyCombo::logo(KeyCode::Char(',')))
+            .then_some(HotkeyAction::SwitchToSettings)
     })
 }
 
@@ -699,9 +701,10 @@ mod tests {
             keyboard::Modifiers::LOGO,
             &config,
         );
-        assert!(
+        assert_eq!(
             matches!(msg, Some(Message::ToggleSettings)),
-            "Cmd+, should toggle Settings"
+            cfg!(target_os = "macos"),
+            "Cmd+, toggles Settings on macOS only; an unbound Super+, does nothing elsewhere"
         );
 
         // Cmd+X must not trigger the bare 'x' binding (Toggle Random).
