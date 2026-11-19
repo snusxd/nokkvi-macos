@@ -8,8 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/f-o-o-g-s/nokkvi" alt="License" /></a>
 </p>
 
-> **🍴 Fork notice**
->
+> [!NOTE]
 > This is a private fork of [f-o-o-g-s/nokkvi](https://github.com/f-o-o-g-s/nokkvi) (macOS port and local changes). The original project lives upstream; sync with `git fetch upstream && git merge upstream/main`.
 
 A native Rust/Iced client for [Navidrome](https://www.navidrome.org/) music server. Named after Old Norse *nökkvi*, a small, humble boat.
