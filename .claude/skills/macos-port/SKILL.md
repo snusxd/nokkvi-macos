@@ -72,9 +72,8 @@ Then `cargo build --release` for the owner. There is no release-build Stop hook 
 
 **Linux can't be compiled from the Mac**: `pipewire-sys`/`libspa-sys` run bindgen against system PipeWire headers. So:
 
-- Every `#[cfg(target_os = "linux")]` edit is unverified until Linux CI (ubuntu-latest, `.github/workflows/ci.yml`) passes. Say so in the handoff. Read the Linux branch of each `cfg` you touch as carefully as if you were compiling it by eye: imports used only on one side, `expect(unused_…)` that would be unfulfilled on Linux, arms missing for cfg'd variants.
+- The fork's CI (`.github/workflows/ci.yml`) runs on macOS only; it has no Linux job, so every `#[cfg(target_os = "linux")]` edit stays unverified until the Docker check below passes or upstream's Linux CI builds it. Say so in the handoff. Read the Linux branch of each `cfg` you touch as carefully as if you were compiling it by eye: imports used only on one side, `expect(unused_…)` that would be unfulfilled on Linux, arms missing for cfg'd variants.
 - Optional local check if Docker is available: `git archive HEAD | docker run -i --rm rust:latest sh -c 'mkdir /src && tar x -C /src && apt-get update && apt-get install -y libpipewire-0.3-dev libfontconfig1-dev pkg-config libasound2-dev cmake libclang-dev && cd /src && cargo clippy --workspace --all-targets -- -D warnings'` (archive a commit, never mount the live tree with `target/`).
-- CI has no macOS job yet. Adding a `macos-latest` job to `ci.yml` (no apt step; `cmake` is preinstalled on GitHub's macOS runners) is the first thing to propose once the tree is green on the Mac.
 
 ## When the port changes conventions
 

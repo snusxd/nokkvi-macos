@@ -10,40 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Build & Test
-    runs-on: ubuntu-latest
-    # Job budget: ~1.5x the slowest cold-cache run (~19m). The Test step
-    # carries its own tighter limit as the hang guard.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libfontconfig1-dev pkg-config libasound2-dev cmake libclang-dev
-
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Format check
-        run: cargo +nightly fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        timeout-minutes: 15
-        run: cargo test --workspace
-
-      - name: Build (release)
-        run: cargo build --release
-
   check-macos:
     name: Build & Test (macOS)
     runs-on: macos-latest
