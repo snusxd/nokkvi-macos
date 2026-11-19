@@ -242,6 +242,8 @@ jobs:
     name: Update Homebrew cask
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
+    # HOMEBREW_TAP_TOKEN lives as an environment secret of this environment.
+    environment: HOMEBREW_TAP_TOKEN
     permissions:
       contents: read
     steps:
