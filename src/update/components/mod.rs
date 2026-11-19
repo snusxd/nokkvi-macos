@@ -216,6 +216,9 @@ impl Nokkvi {
         // Every call is a new play attempt: a failure of an older one must
         // not hand radio mode back over it.
         self.playback.play_attempt.bump();
+        // A play the user started wins over a resume waiting for an Autoplay
+        // batch.
+        self.forget_autoplay_resume();
         // Never blocks: blocking would prevent ever resuming queue playback
         // while a radio stream is active. The engine stop is handled by the
         // play action that follows, which is why the station is remembered:
@@ -378,6 +381,44 @@ impl Nokkvi {
         F: FnOnce(nokkvi_data::backend::app_service::AppService, P) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
     {
+        self.queue_play_task_inner(prepare, play, on_ok, failure, std::convert::identity)
+    }
+
+    /// [`Self::queue_play_task`] for a caller that must hear back however
+    /// the play ends: every outcome (`on_ok`'s message, the failure toast,
+    /// the radio hand-back, a session expiry) reaches the root through
+    /// `settle`, which wraps it in the caller's own completion message.
+    /// Harbour's Instant Mix clears its busy flag that way; through the
+    /// plain builder a failed mix would leave the row on "Building…".
+    pub(crate) fn queue_play_task_settled<F, Fut>(
+        &mut self,
+        play: F,
+        on_ok: impl FnOnce() -> Message + Send + 'static,
+        failure: String,
+        settle: impl FnOnce(Message) -> Message + Send + 'static,
+    ) -> Task<Message>
+    where
+        F: FnOnce(nokkvi_data::backend::app_service::AppService) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+    {
+        self.queue_play_task_inner(|_| (), move |shell, ()| play(shell), on_ok, failure, settle)
+    }
+
+    /// The one body of the queue-replacing play builders: the prologue, the
+    /// play, and the outcome message handed through `settle`.
+    fn queue_play_task_inner<P, F, Fut>(
+        &mut self,
+        prepare: impl FnOnce(&mut Self) -> P,
+        play: F,
+        on_ok: impl FnOnce() -> Message + Send + 'static,
+        failure: String,
+        settle: impl FnOnce(Message) -> Message + Send + 'static,
+    ) -> Task<Message>
+    where
+        P: Send + 'static,
+        F: FnOnce(nokkvi_data::backend::app_service::AppService, P) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+    {
         self.guard_play_action();
         self.enter_new_playback_context();
         let prepared = prepare(self);
@@ -400,13 +441,15 @@ impl Nokkvi {
                 };
                 (result, station_still_on)
             },
-            move |(result, station_still_on)| match result {
-                Ok(()) => on_ok(),
-                Err(e) => Self::queue_play_failure_message(
-                    &e,
-                    &failure,
-                    station_still_on.then_some(attempt),
-                ),
+            move |(result, station_still_on)| {
+                settle(match result {
+                    Ok(()) => on_ok(),
+                    Err(e) => Self::queue_play_failure_message(
+                        &e,
+                        &failure,
+                        station_still_on.then_some(attempt),
+                    ),
+                })
             },
         )
     }
@@ -1829,6 +1872,9 @@ impl Nokkvi {
             dynamic_accent: _,
             // Envelopes on screen and the job in flight (a scan is stopped).
             waveform: _,
+            // The fill in flight, the retry gate, the pending resume and the
+            // ran-out count, which the backend restarts at 0 with each login.
+            autoplay: _,
             // The root modals, through `ActiveModal::STACK`.
             text_input_dialog: _,
             info_modal: _,
@@ -1916,6 +1962,9 @@ impl Nokkvi {
         self.dynamic_accent_reset();
         // The waveform on screen and any scan belong to the session.
         self.waveform.reset();
+        // Autoplay's fill, retries, pending resume and ran-out count belong to
+        // the session (its fill result is dropped with the session).
+        self.autoplay = crate::state::AutoplayState::default();
         // Phase 1: cache the storage handle for re-login, then build a single
         // async teardown Task that — in this strict order — (1) stops the audio
         // engine, (2) drains the TaskManager so every tracked persistence /

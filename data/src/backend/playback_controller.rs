@@ -60,6 +60,22 @@ pub struct PlaybackController {
     /// engine). Competing NON-skip actions are covered separately by the
     /// source-generation snapshot inside `crossfade_to_next`.
     skip_fade_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// The navigator's natural-queue-end counter
+    /// ([`Self::queue_ran_out_epoch`]), held here so the UI tick reads it
+    /// without the navigator lock.
+    queue_ran_out: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Which play of a queued row [`PlaybackController::play_queued_entry`]
+/// runs.
+#[derive(Debug, Clone, Copy)]
+enum QueuedPlay {
+    /// A click (or Append and Play): re-anchors the shuffle when it starts
+    /// playback; a missing row is an error.
+    Click,
+    /// Autoplay continuing after the queue ran out: only with no current
+    /// row and a stopped engine, never re-anchoring.
+    ResumeAfterRunOut,
 }
 
 impl std::fmt::Debug for PlaybackController {
@@ -84,7 +100,9 @@ impl PlaybackController {
         task_manager: Arc<TaskManager>,
     ) -> Result<(Self, UnboundedReceiver<String>, UnboundedReceiver<()>)> {
         let queue_manager = queue_service.queue_manager();
-        let queue_navigator = Arc::new(Mutex::new(QueueNavigator::new(queue_manager).await?));
+        let navigator = QueueNavigator::new(queue_manager).await?;
+        let queue_ran_out = navigator.queue_ran_out_counter();
+        let queue_navigator = Arc::new(Mutex::new(navigator));
         let audio_engine = Arc::new(Mutex::new(CustomAudioEngine::new()));
         let (loop_tx, loop_rx) = mpsc::unbounded_channel::<String>();
         let (queue_changed_tx, queue_changed_rx) = mpsc::unbounded_channel::<()>();
@@ -206,10 +224,42 @@ impl PlaybackController {
                 settings_service,
                 task_manager,
                 skip_fade_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                queue_ran_out,
             },
             loop_rx,
             queue_changed_rx,
         ))
+    }
+
+    /// How many times playback ended because the queue had no next song
+    /// (a track completion at the end of the queue, Repeat off). A user
+    /// Stop, a removal, a skip or a failed load never counts. Autoplay
+    /// compares it across a fill to tell the queue running out from the user
+    /// emptying it.
+    pub fn queue_ran_out_epoch(&self) -> u64 {
+        self.queue_ran_out.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Run the track-completion path for a track that ended (no gapless
+    /// join), as the engine's completion callback does: decide under the
+    /// navigator, then the engine ops. For tests that need a natural
+    /// advance or queue end without decoding audio.
+    #[cfg(test)]
+    pub(crate) async fn complete_track_for_test(&self) {
+        let session = crate::services::playback::StreamSession::new(
+            "http://127.0.0.1:9".to_owned(),
+            "u=t&s=s&t=t".to_owned(),
+        )
+        .expect("a test session");
+        let mut engine = self.audio_engine.lock().await;
+        let ended = engine.ended_now(false);
+        let plan = {
+            let nav = self.queue_navigator.lock().await;
+            nav.decide_transition(&mut engine, &session, ended).await
+        };
+        if let Err(e) = QueueNavigator::execute_transition(plan, &mut engine).await {
+            tracing::debug!("test completion: {e:#}");
+        }
     }
 
     /// Get a clone of the audio engine Arc (for external progress polling).
@@ -1184,7 +1234,8 @@ impl PlaybackController {
 
     /// Play an already-queued song addressed by its per-row `entry_id`.
     ///
-    /// The one play-from-queue body ([`Self::play_song_from_queue`] resolves
+    /// A click on a queued row, through the one play-from-queue body
+    /// ([`Self::play_queued_entry`]; [`Self::play_song_from_queue`] resolves
     /// its row to an `entry_id` and comes here). The `entry_id` →
     /// (queue_index, song_id) resolution happens under the queue lock, so a
     /// stale UI snapshot cannot send a wrong raw index.
@@ -1192,6 +1243,29 @@ impl PlaybackController {
     /// distinct `entry_id`s, so the user gets the exact instance they
     /// clicked.
     pub async fn play_entry_from_queue(&self, entry_id: u64) -> Result<()> {
+        self.play_queued_entry(entry_id, QueuedPlay::Click)
+            .await
+            .map(|_played| ())
+    }
+
+    /// Play the Autoplay row `entry_id` after the queue ran out, continuing
+    /// into the batch: only while NO row is current and the engine is
+    /// stopped (both read under the locks the play takes), so it does
+    /// nothing once the user started or cued something since. The play
+    /// order is left as it is (no shuffle re-anchor) and the cursor moves to
+    /// the row's slot, so what follows is the rest of the batch, which
+    /// `QueueManager::append_autoplay_songs` put at the tail. `Ok(false)`
+    /// when it did nothing (a row is current, the engine is not stopped,
+    /// the row is gone).
+    pub async fn resume_into_autoplay(&self, entry_id: u64) -> Result<bool> {
+        self.play_queued_entry(entry_id, QueuedPlay::ResumeAfterRunOut)
+            .await
+    }
+
+    /// The one play-a-queued-row body behind [`Self::play_entry_from_queue`]
+    /// and [`Self::resume_into_autoplay`]; `how` picks the guard and whether
+    /// the shuffle re-anchors. `Ok(false)` only from the resume's guards.
+    async fn play_queued_entry(&self, entry_id: u64, how: QueuedPlay) -> Result<bool> {
         // Before the cursor moves: no session, no change.
         let session = self.require_stream_session().await?;
         let queue_manager = self.queue_service.queue_manager();
@@ -1205,7 +1279,20 @@ impl PlaybackController {
         // `load_play_and_set_current`); the queue lock nests under it, never
         // the other way round.
         let engine = self.audio_engine.lock().await;
-        let starting_fresh = Self::should_reanchor_for_play(engine.state());
+        let reanchor = match how {
+            QueuedPlay::Click => Self::should_reanchor_for_play(engine.state()),
+            QueuedPlay::ResumeAfterRunOut => {
+                // Stopped by both of the engine's reckonings: its transport
+                // state and its playing flag (a paused engine holds a source
+                // the user can resume).
+                if engine.state() != crate::audio::engine::PlaybackState::Stopped
+                    || engine.playing()
+                {
+                    return Ok(false);
+                }
+                false
+            }
+        };
 
         // 0+1. Record history, resolve entry_id, reposition — all under
         //      one qm lock so the resolution is atomic with the reposition.
@@ -1218,6 +1305,11 @@ impl PlaybackController {
                 .await;
 
             let mut qm = queue_manager.lock().await;
+            if matches!(how, QueuedPlay::ResumeAfterRunOut)
+                && (qm.current_index().is_some() || qm.index_of_entry(entry_id).is_none())
+            {
+                return Ok(false);
+            }
             if let Some(ref cid) = current_id {
                 // Key history by the leaving row's stable entry_id, resolved
                 // from the recorded song's OWN row so (song, entry_id) agree.
@@ -1235,7 +1327,7 @@ impl PlaybackController {
                         "play_entry_from_queue: song_id missing at queue position {queue_index}"
                     )
                 })?;
-            let effect = if starting_fresh {
+            let effect = if reanchor {
                 // Re-anchor under shuffle (no-op reshuffle when shuffle is off,
                 // so this stays a plain reposition for sequential playback).
                 qm.reanchor_shuffle_to_index(queue_index)
@@ -1259,25 +1351,27 @@ impl PlaybackController {
         self.load_play_and_set_current(engine, &stream_url, song, reposition_effect, song_id)
             .await?;
 
-        Ok(())
+        Ok(true)
     }
 
-    /// Play a song that's already in the queue by its ID and queue index.
-    ///
-    /// **Internal/orchestrator use only.** UI handlers must use
-    /// [`Self::play_entry_from_queue`] — `queue_index` is drift-prone
-    /// across the optimistic-mutation window. The orchestrator
-    /// (`queue_orchestrator::enqueue_and_play`) uses this method legitimately:
-    /// it appends songs and immediately plays the first new row at the
-    /// known just-appended index, so no other mutation has had a chance
-    /// to shift positions.
+    /// Play a song that's already in the queue by its ID and queue index:
+    /// a test convenience. Production plays a queued row by its `entry_id`
+    /// ([`Self::play_entry_from_queue`]; Append and Play uses the one its
+    /// append handed out), since a raw index drifts across the UI's
+    /// optimistic-mutation window and an append can land ahead of pending
+    /// Autoplay rows.
     ///
     /// Resolves the row to its `entry_id` and plays it through
     /// [`Self::play_entry_from_queue`], so it records history and moves the
     /// cursor exactly as a queue click does, the shuffle re-anchor of a play
     /// that starts playback included. Fails, changing nothing, when the row
     /// at `queue_index` no longer holds `song_id`.
-    pub async fn play_song_from_queue(&self, song_id: &str, queue_index: usize) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) async fn play_song_from_queue(
+        &self,
+        song_id: &str,
+        queue_index: usize,
+    ) -> Result<()> {
         let entry_id = {
             let queue_manager = self.queue_service.queue_manager();
             let qm = queue_manager.lock().await;
@@ -2864,6 +2958,102 @@ mod tests {
         );
         let playing = queue.current_index().and_then(|row| qm.song_id_at(row));
         assert_eq!(playing, Some("x"));
+        Ok(())
+    }
+
+    /// The queue ran out and an Autoplay batch landed: resuming plays its
+    /// first row WITHOUT re-anchoring the shuffle, so what follows is the
+    /// rest of the batch and none of the played rows, shuffle on or off.
+    #[tokio::test(flavor = "current_thread")]
+    async fn resume_into_autoplay_continues_into_the_batch_only() -> Result<()> {
+        for shuffle in [false, true] {
+            let fx = click_fixture().await?;
+            let played: Vec<crate::types::song::Song> =
+                (0..6).map(|i| click_song(&format!("p{i}"))).collect();
+            let _ = fx.queue.set_queue(played, Some(0)).await;
+            let batch = {
+                let qm_arc = fx.queue.queue_manager();
+                let mut qm = qm_arc.lock().await;
+                if shuffle {
+                    let _ = qm.toggle_shuffle();
+                }
+                let _ = qm.reposition_to_index(None);
+                let appended = qm.append_autoplay_songs(vec![
+                    click_song("x"),
+                    click_song("y"),
+                    click_song("z"),
+                ]);
+                appended.entry_ids
+            };
+
+            // The engine never played, so it is stopped. The unreachable
+            // server makes the load fail; the queue side is under test.
+            let _ = fx.playback.resume_into_autoplay(batch[0]).await;
+
+            let qm_arc = fx.queue.queue_manager();
+            let qm = qm_arc.lock().await;
+            let playing = qm.current_index().and_then(|row| qm.entry_id_at(row));
+            assert_eq!(
+                playing,
+                Some(batch[0]),
+                "the first added row (shuffle {shuffle})"
+            );
+            assert_eq!(qm.runway(), Some(batch.len() - 1));
+            let cursor = qm.get_queue().current_order.expect("a cursor");
+            let upcoming: Vec<u64> = qm.get_queue().order[cursor + 1..]
+                .iter()
+                .filter_map(|&row| qm.entry_id_at(row))
+                .collect();
+            assert_eq!(upcoming, batch[1..], "only the rest of the batch is ahead");
+        }
+        Ok(())
+    }
+
+    /// Resume does nothing once the user started or cued something since
+    /// the run-out (a current row, a playing engine), nor for a row that is
+    /// gone.
+    #[tokio::test(flavor = "current_thread")]
+    async fn resume_into_autoplay_is_a_no_op_unless_the_queue_ran_out_and_stopped() -> Result<()> {
+        let fx = click_fixture().await?;
+        let _ = fx
+            .queue
+            .set_queue(vec![click_song("a"), click_song("b")], Some(0))
+            .await;
+        let batch = fx
+            .queue
+            .queue_manager()
+            .lock()
+            .await
+            .append_autoplay_songs(vec![click_song("x")])
+            .entry_ids;
+
+        let resumed = fx.playback.resume_into_autoplay(batch[0]).await?;
+        assert!(!resumed, "a row is current");
+        assert_eq!(fx.queue.current_index().await, Some(0));
+
+        let _ = fx
+            .queue
+            .queue_manager()
+            .lock()
+            .await
+            .reposition_to_index(None);
+        assert!(
+            !fx.playback.resume_into_autoplay(u64::MAX).await?,
+            "the row is gone"
+        );
+
+        fx.playback
+            .audio_engine()
+            .lock()
+            .await
+            .force_playing_for_test();
+        let resumed = fx.playback.resume_into_autoplay(batch[0]).await?;
+        assert!(!resumed, "the engine is playing");
+        assert_eq!(
+            fx.queue.current_index().await,
+            None,
+            "the cursor never moved"
+        );
         Ok(())
     }
 

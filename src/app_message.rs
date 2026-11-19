@@ -206,6 +206,13 @@ pub struct PlaybackStateUpdate {
     /// since the last tick (`CustomAudioEngine::take_stream_lost`): its song
     /// ended early. Shown once as a warning.
     pub stream_lost: bool,
+    /// Songs after the current one in play order (`QueueManager::runway`),
+    /// read under the same queue lock as `current_index`; `None` with no
+    /// current row. Autoplay's fill trigger reads it.
+    pub autoplay_runway: Option<usize>,
+    /// How many times the queue ran out (`AppService::queue_ran_out_epoch`;
+    /// starts at 0 with every login). Autoplay resumes when it moves.
+    pub queue_ran_out_epoch: u64,
 }
 
 /// Async lyrics-resolve pipeline messages, carried by `Message::LyricsLoader`.
@@ -281,6 +288,22 @@ pub enum PlaybackMessage {
     RepeatToggled(bool, bool),
     ToggleConsume,
     ConsumeToggled(bool),
+    /// Turn Autoplay on or off (player bar, kebab, hotkey, CLI).
+    ToggleAutoplay,
+    /// An Autoplay fill (`AppService::autoplay_top_up`) answered.
+    AutoplayFilled {
+        after_run_out: bool,
+        fill: crate::state::AutoplayFill,
+    },
+    /// Autoplay went off and its unplayed rows were cleared: how many.
+    AutoplayCleared {
+        removed: usize,
+    },
+    /// The resume into an Autoplay batch after the queue ran out answered:
+    /// whether it played (`AppService::resume_into_autoplay`).
+    AutoplayResumed {
+        played: bool,
+    },
     ToggleSoundEffects,
     SfxVolumeChanged(f32),
     CycleVisualization,
@@ -1472,14 +1495,11 @@ pub struct HarbourShelvesData {
     pub random_playlist: Option<nokkvi_data::backend::playlists::PlaylistUIViewData>,
 }
 
-/// Backend results for the Harbour home view. Each variant carries the
+/// Backend results for the Harbour home view. Each load carries the
 /// `generation` captured when its fetch was dispatched; the handler drops any
 /// result whose generation no longer matches `HarbourState::shelves_generation`
-/// (stale-load rejection, Similar-view precedent).
-#[expect(
-    clippy::enum_variant_names,
-    reason = "every variant is a loader result, so the shared Loaded postfix reads as intent"
-)]
+/// (stale-load rejection, Similar-view precedent). `InstantMixSettled` is the
+/// one ungated variant (its doc says why).
 #[derive(Debug, Clone)]
 pub enum HarbourLoaderMessage {
     /// The joined shelf fetch completed.
@@ -1512,6 +1532,12 @@ pub enum HarbourLoaderMessage {
         target: CollageTarget,
         results: Vec<(String, Vec<String>)>,
     },
+    /// An Instant Mix build ended, whatever its outcome (the play's or the
+    /// add's own message: a view switch, a toast, `SessionExpired`). Clears
+    /// the row's busy flag (`HarbourState::instant_mix_building`), then
+    /// handles the outcome. Not generation-gated: one build runs at a time
+    /// and `shell_task` already drops a settle from an ended session.
+    InstantMixSettled(Box<Message>),
 }
 
 /// Identifies the single overlay menu that may be open across the app.
@@ -1933,6 +1959,10 @@ pub enum Message {
     ),
     /// Tracks global keyboard modifiers (shift/ctrl/alt/logo) for mouse interaction (e.g. shift+click)
     ModifiersChanged(iced::keyboard::Modifiers),
+    /// A key was released. A held key's run of navigation steps is over, so
+    /// the big panel fetches the row it stopped on now instead of waiting
+    /// out that row's timer (`Nokkvi::handle_key_released`).
+    KeyReleased,
 
     // --- Toast Notifications ---
     Toast(ToastMessage),

@@ -763,6 +763,7 @@ impl Nokkvi {
                 task
             }
             Message::ModifiersChanged(modifiers) => self.handle_modifiers_changed(modifiers),
+            Message::KeyReleased => self.handle_key_released(),
 
             // -----------------------------------------------------------------
             // Toast Notifications

@@ -168,6 +168,7 @@ impl Nokkvi {
             crossfade_offset_secs: i64::from(self.settings.crossfade_offset_secs),
             crossfade_bar_snap: self.settings.crossfade_bar_snap,
             rewind_on_previous: self.settings.rewind_on_previous,
+            autoplay_enabled: self.settings.autoplay_enabled,
             stream_format: self.settings.stream_format.as_label().into(),
             stream_max_bitrate: self.settings.stream_max_bitrate.as_label().into(),
             volume_normalization: self.settings.volume_normalization.as_label().into(),
@@ -874,6 +875,7 @@ impl Nokkvi {
         let enabling_bit_perfect = key == "general.bit_perfect"
             && matches!(&value, SettingValue::Enum { val, .. }
                 if BitPerfectMode::from_label(val) != BitPerfectMode::Off);
+        let autoplay_off = settings_row_turns_autoplay_off(&key, &value);
         let result = {
             let mut mgr = mgr_arc.blocking_lock();
             nokkvi_data::services::settings_tables::dispatch_general_tab_setting(
@@ -913,11 +915,7 @@ impl Nokkvi {
             })
         };
         match result {
-            Some(Ok((effect, p))) => {
-                let state_task = self.handle_player_settings_loaded(p);
-                let side_task = self.dispatch_settings_side_effect(effect);
-                Task::batch([state_task, side_task])
-            }
+            Some(Ok((effect, p))) => self.finish_general_setting(autoplay_off, effect, p),
             Some(Err(e)) => {
                 tracing::warn!(" [SETTINGS] Macro dispatch failed for {key}: {e:#}");
                 Task::none()
@@ -927,6 +925,26 @@ impl Nokkvi {
                 Task::none()
             }
         }
+    }
+
+    /// The tail of a Settings-tab write whose setter ran: apply the settings
+    /// it left in memory, run its side effect, and, when the write was the
+    /// Autoplay row going off, Autoplay's going-off cleanup (the setting is
+    /// already persisted by the setter).
+    pub(crate) fn finish_general_setting(
+        &mut self,
+        autoplay_off: bool,
+        effect: nokkvi_data::services::settings_tables::SettingsSideEffect,
+        settings: crate::app_message::LivePlayerSettings,
+    ) -> Task<Message> {
+        let state_task = self.handle_player_settings_loaded(settings);
+        let side_task = self.dispatch_settings_side_effect(effect);
+        let autoplay_task = if autoplay_off {
+            self.autoplay_went_off(false)
+        } else {
+            Task::none()
+        };
+        Task::batch([state_task, side_task, autoplay_task])
     }
 
     /// Run the iced-side follow-up work that a setting's `on_dispatch:`
@@ -1100,4 +1118,16 @@ pub(crate) fn visualizer_secondary_writes(
         ));
     }
     writes
+}
+
+/// Whether a Settings-tab write is the Autoplay row turning Autoplay off.
+pub(crate) fn settings_row_turns_autoplay_off(
+    key: &str,
+    value: &crate::views::settings::items::SettingValue,
+) -> bool {
+    key == "general.autoplay_enabled"
+        && matches!(
+            value,
+            crate::views::settings::items::SettingValue::Bool(false)
+        )
 }

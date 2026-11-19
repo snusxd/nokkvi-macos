@@ -35,52 +35,33 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
-## v0.30.0 — 2026-11-12
+## v0.31.0 — 2026-11-18
 
 ### Added
 
-- An expanded artist's albums are grouped under release-type headers: Albums, EPs, Singles, Live, Compilations and more, with Appears On last.
-- An artist with only plain albums keeps the flat album list.
-- Enter on a release-type header plays that whole section in list order, or adds it from the split view's library pane.
-- Shift+Enter on a release-type header, or a click on its chevron, folds or unfolds the section.
-- Folded sections stay folded for every artist until nokkvi quits.
-- A release-type header's right-click menu shuffles its section, or adds it to the queue, a playlist or a mix.
-- A selected release-type header stands for all of its albums in batch actions.
-- Album rows under a release-type header carry small tags for what the header leaves out, like Live on an EP.
-- Album rows under a release-type header also tag the album version, like Deluxe Edition, and mark explicit albums with an E.
-- Albums under Appears On name their own artist.
-- Settings → General has Group Artist Albums by Release Type, on by default.
-- With Group Artist Albums by Release Type off, an expanded artist's albums show as one list, newest first.
-- Get Info on an album shows its version, like Deluxe Edition, and its record label when the tags carry them.
-- Playlist rows have a clickable heart and star rating on Navidrome 0.64 or newer, like album rows.
-- The star and rating keys work on a focused playlist row.
-- The Playlists view sorts by Favorited and by Rating.
-- The Playlists columns menu has Stars and Love toggles; Stars is off by default and shows under a Rating sort.
-- The playlist artwork panel shows Favorited and the rating.
-- The Albums artwork panel shows the centred album's notes under its stats when Navidrome has any.
-- A Read more link under an album's notes opens the album's page, usually on Last.fm.
-- Get Info on an album lists its notes and external link when Navidrome has them.
+- Harbour's new Instant Mix row keeps the playing song and replaces the rest of the queue with songs like it.
+- With nothing playing, Instant Mix plays songs like up to five songs Harbour picks from your recent, most played or random tracks.
+- Shift+A on the Instant Mix row adds the mix to the queue and skips songs already in it.
+- Instant Mix leaves out tracks under a minute and songs rated one star.
+- Autoplay, a new playback mode, adds 10 songs like your last few when at most one song is left after the playing one.
+- Autoplay toggles from its infinity button in the player bar, the modes menu, the `a` key, `nokkvi autoplay` or Settings → Playback.
+- Songs Autoplay added show a small infinity sign before their artist in the Queue.
+- Songs you add to the queue go ahead of the Autoplay songs that have not played yet, while shuffle is off.
+- Turning Autoplay off removes the songs it added that have not played yet.
+- When it finds no similar, same-genre or same-artist songs, Autoplay adds random songs from your library instead.
+- Autoplay waits while Repeat is on, and its button's tooltip says so.
+- If the queue runs out before a batch arrives, Autoplay plays the batch's first song when it lands.
 
-### Fixed
+### Changed
 
-- `nokkvi love` and `nokkvi rate` now refuse during radio playback instead of starring or rating the last queue song.
-- With crossfade off, seeking to a song's last second while paused no longer starts the next song playing.
-- Clicking a song just as the playing one changes no longer leaves the queue one song past the click.
-- Stop pressed just as a song changes gaplessly no longer starts the next song.
-- Dragging a row to the queue from under an expanded album, artist or genre now shows that row on the drag label.
-- A slow album or track load no longer re-opens a row you already closed, or replaces the row you opened after it.
-- Switching between Albums and the Queue no longer downloads the same album thumbnails again each time.
-- The Playlists list no longer jumps back to the top when a playlist changes on the server.
-- The Albums artwork panel no longer repeats the year, like "2003 (2003)", for an album with no original date.
-- The Albums artwork panel no longer reads "0 (2021)" for an album tagged with only a year.
-- Launching nokkvi no longer asks the server, ListenBrainz and Deezer about the first artist in the Artists list before that view is opened.
-- A roulette spin in Artists no longer looks up the artists it passes when the list reloads mid-spin.
-- The Albums, Artists, Songs and Playlists lists no longer blink to "Loading..." when the server reports a change, like a scrobble.
-- Scrolling to the end of the loaded rows no longer blanks the list while the next page loads.
-- The big cover no longer goes blank for an instant between the thumbnail and the full-size picture when you land on an album or artist.
+- Most of the GPU memory the Bars, Lines or Scope visualizer takes in fullscreen Theater Mode is now freed once it is off screen.
+- The Albums view now uses about half the CPU while a song plays.
+- The Artists, Genres and Playlists views now use less CPU while a song plays.
+- The night Trawl scene's anchor is now outlined and shaded like the boat instead of a flat shape.
 
 ## Older releases
 
+- **v0.30.x** (2026-11-12 → 2026-11-13, v0.30.0–v0.30.1): [CHANGELOG-0.30.md](./changelog-archive/CHANGELOG-0.30.md)
 - **v0.29.x** (2026-11-10, v0.29.0): [CHANGELOG-0.29.md](./changelog-archive/CHANGELOG-0.29.md)
 - **v0.28.x** (2026-10-22 → 2026-11-03, v0.28.0–v0.28.2): [CHANGELOG-0.28.md](./changelog-archive/CHANGELOG-0.28.md)
 - **v0.27.x** (2026-10-17 → 2026-10-20, v0.27.0–v0.27.2): [CHANGELOG-0.27.md](./changelog-archive/CHANGELOG-0.27.md)

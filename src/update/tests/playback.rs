@@ -84,12 +84,14 @@ pub(super) fn make_playback_update() -> PlaybackStateUpdate {
         next_track_epoch: 0,
         seek_failure: None,
         stream_lost: false,
+        autoplay_runway: None,
+        queue_ran_out_epoch: 0,
         stream_status: crate::state::StreamStatus::default(),
         station_id: None,
     }
 }
 
-fn radio_playing(id: &str) -> crate::state::ActivePlayback {
+pub(super) fn radio_playing(id: &str) -> crate::state::ActivePlayback {
     crate::state::ActivePlayback::Radio(crate::state::RadioPlaybackState {
         station: nokkvi_data::types::radio_station::RadioStation {
             id: id.into(),
