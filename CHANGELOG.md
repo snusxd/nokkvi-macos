@@ -6,25 +6,40 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## v0.31.0-macos.1 — 2026-11-19
+
+### Added
+
+- nokkvi runs natively on macOS 11 and newer, on Apple silicon and Intel, as `Nokkvi.app` in a DMG or ZIP.
+- Homebrew installs it with `brew install --cask snusxd/nokkvi-macos/nokkvi-macos`.
+- The playing song shows in Control Center's Now Playing.
+- The media keys and Control Center's buttons control playback.
+- Hotkeys can use Cmd, and Settings → Hotkeys shows modifiers as ⌃⌥⇧⌘ symbols.
+- Settings refuses system shortcuts such as ⌘Q, ⌘C or ⌘Tab as hotkeys.
 - A new visualizer, Cover Beat, follows MilkDrop on the visualizer button: the now-playing cover swells on each kick drum and settles back.
 - Cover Beat follows the kick drum only, not snares or hi-hats.
 - In Theater Mode the Cover Beat cover grows past its edges; in the Queue and Radios it zooms within its frame.
 - Settings → Interface → Artwork Column → Cover Beat Strength picks Subtle or Punchy.
-- On macOS, hotkeys can use Cmd, and Settings → Hotkeys shows modifiers as ⌃⌥⇧⌘ symbols.
-- On macOS, Settings refuses system shortcuts such as ⌘Q, ⌘C or ⌘Tab as hotkeys.
 - Settings → Playback → Discord → Discord App ID shows what you're listening to on your Discord profile.
 - The Discord status shows the album cover when your Navidrome is reachable from the internet, else the app's icon.
+- Settings → Interface → Now Playing Sidebar adds a column with the playing track's title, artist and album card; Cmd+B toggles it.
+- Settings → Interface → Font Size and Font Weight scale and thicken all text.
+- Trackpad scrolling glides by pixels and settles onto the row grid; Settings → General → Smooth Trackpad Scroll turns it off.
 
 ### Changed
 
-- The About modal now credits Fable 5.2 instead of Fable 5.1 among the shipwrights.
-- The macOS app icon now sits on a dark graphite plate, with neutral greys in place of the teal tint.
-- On macOS, the hotkeys that defaulted to Ctrl, like Shuffle Play and Roulette, now default to Cmd.
-- On macOS, Cmd+click replaces Ctrl+click for selecting several rows.
+- The hotkeys that default to Ctrl upstream, like Shuffle Play and Roulette, default to Cmd.
+- Cmd+click replaces Ctrl+click for selecting several rows.
 - A paused or stopped visualizer now holds still once its bars have fallen, so an idle nokkvi uses almost no CPU.
 - The Harbour sea pauses while nothing plays and the window is unfocused or untouched for a minute, and resumes where it stopped.
 - While paused, long now-playing titles rest at their start instead of scrolling; hovering one scrolls it.
-- Playing music now uses a fraction of the CPU it did, since the seek bar and now-playing glow no longer redraw the whole window every frame.
+- Playing music now uses a fraction of the CPU it did.
 - The Harbour scene animates at 60 fps on high-refresh displays, which cuts its CPU use while music plays.
 
 ### Fixed
@@ -32,8 +47,6 @@ All notable changes to this project will be documented in this file.
 - Letter and punctuation hotkeys now work on non-Latin keyboard layouts such as Russian.
 - Number-row hotkeys now work on layouts like AZERTY, where that row types symbols without Shift.
 - Leaving the Harbour view with the visualizer off now stops the background audio analysis it had started.
-
-### Removed
 
 ## v0.31.0 — 2026-11-18
 
