@@ -44,7 +44,7 @@ bin="target/$profile/nokkvi"
 [[ -x "$bin" ]] || { echo "no binary at $bin; build first" >&2; exit 1; }
 
 # Version comes from the root package so the bundle never drifts from Cargo.toml.
-version=$(cargo metadata --no-deps --format-version 1 \
+version=$(cargo metadata --no-deps --offline --format-version 1 \
   | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="nokkvi"))')
 
 app="target/$profile/bundle/Nokkvi.app"
@@ -78,7 +78,7 @@ plutil -lint "$app/Contents/Info.plist" >/dev/null
 
 # Ad-hoc signature: Apple silicon only runs signed code, and the bundle needs
 # its own seal over Info.plist + resources (the linker only signed the binary).
-codesign --force --sign - "$app"
+codesign --force --deep --sign - "$app"
 
 echo "Built $app (v$version, $profile)"
 

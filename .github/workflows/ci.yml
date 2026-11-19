@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, macos]
   pull_request:
-    branches: [main]
+    branches: [main, macos]
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +21,37 @@ jobs:
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libfontconfig1-dev pkg-config libasound2-dev cmake libclang-dev
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        timeout-minutes: 15
+        run: cargo test --workspace
+
+      - name: Build (release)
+        run: cargo build --release
+
+  check-macos:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+    # cmake and Xcode Command Line Tools are preinstalled on GitHub macOS
+    # runners; audio uses CoreAudio and fonts use CoreText (no PipeWire/ALSA).
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@nightly
         with:

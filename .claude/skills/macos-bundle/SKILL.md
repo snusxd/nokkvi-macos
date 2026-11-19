@@ -46,13 +46,12 @@ Output goes under `target/` (e.g. `target/release/bundle/Nokkvi.app`), never int
 - **Developer ID + notarization** is needed to distribute without Gatekeeper's "unidentified developer" block: a paid Apple Developer account, `codesign --options runtime --timestamp -s "Developer ID Application: …"`, then `xcrun notarytool submit … --wait` and `xcrun stapler staple`. This involves the owner's Apple credentials — never handle them yourself; the owner runs the credentialed steps or stores them as CI secrets.
 - Hardened runtime may need entitlements (e.g. `com.apple.security.cs.allow-jit` is *not* needed for wgpu/Metal; network client access needs none outside the sandbox). Don't enable App Sandbox: the config watcher, IPC socket in `$TMPDIR` and arbitrary server URLs would all need exceptions.
 
-## Release workflow
+## CI and release workflow
 
-Today `.github/workflows/release.yml` builds only `x86_64-unknown-linux-gnu` and `/package` (`.claude/skills/package/SKILL.md`) uploads a tarball + `.sha256` and syncs the AUR. A macOS leg means:
-
-1. A `macos-latest` job in `release.yml` that builds `aarch64-apple-darwin`, runs the bundle script, zips (`ditto -c -k --keepParent Nokkvi.app …zip`) or makes a DMG (`hdiutil create`), and attaches it with its `.sha256` to the same draft release.
-2. `/package` step 7 (watch + publish) checks the macOS asset too; README install instructions gain a macOS section. Update the `package` skill in the same change — it is the canonical release procedure.
-3. Unsigned/ad-hoc artifacts make users right-click → Open (or `xattr -dr com.apple.quarantine`); say so in the release notes until notarization exists.
+- **CI (`.github/workflows/ci.yml`)** triggers on push and pull_request to both `main` and `macos` and runs two jobs in parallel: `check` on `ubuntu-latest` (keeps the fork green on Linux) and `check-macos` on `macos-latest` (Apple silicon). Both run all four gates (`cargo +nightly fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` with the 15-minute timeout, and `cargo build --release`). No extra packages are installed on `macos-latest` (`cmake` and Xcode Command Line Tools are preinstalled; no PipeWire/ALSA on macOS).
+- **Release (`.github/workflows/release.yml`)** on this fork publishes **only macOS artifacts** (no Linux tarball, no upstream docs dispatch):
+  1. `build` (`needs: audit`) runs a two-runner native matrix: `macos-latest` → `aarch64-apple-darwin` and `macos-15-intel` → `x86_64-apple-darwin`. Each leg resolves the release tag, verifies the version bump policy on tag push, builds `cargo build --release --locked`, assembles `target/release/bundle/Nokkvi.app` via `./scripts/bundle-macos.sh --no-build` (ad-hoc signed with `codesign --force --deep --sign -`), packages `nokkvi-<tag>-<triple>.dmg` (`hdiutil create -volname Nokkvi -srcfolder <dir with Nokkvi.app + /Applications symlink> -ov -format UDZO`) and `nokkvi-<tag>-<triple>.zip` (`ditto -c -k --sequesterRsrc --keepParent`), generates `.sha256` files with `shasum -a 256`, and uploads all four as a workflow artifact (`nokkvi-<tag>-<triple>`).
+  2. `publish` (`needs: build`) collects both matrix artifacts via `actions/download-artifact@v4`, extracts the `CHANGELOG.md` section into `release-notes.md`, appends a Gatekeeper first-launch note (`xattr -dr com.apple.quarantine /Applications/Nokkvi.app` or right-click → **Open**, since the bundle is ad-hoc signed), and creates the single draft GitHub release on tag push with `ncipollo/release-action@v1`.
 
 Version bumps still go only through `/package` (code-standards.md).
 

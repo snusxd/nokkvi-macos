@@ -21,10 +21,17 @@ jobs:
     permissions:
       contents: read
 
-  build-release:
-    name: Build x86_64-unknown-linux-gnu
+  build:
+    name: Build ${{ matrix.target }}
     needs: audit
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -58,11 +65,11 @@ jobs:
           echo "New tag:      $RELEASE_TAG"
 
           if [ "$new_major" -gt "$prev_major" ]; then
-            kind=major
+            kind="major"
           elif [ "$new_major" -eq "$prev_major" ] && [ "$new_minor" -gt "$prev_minor" ]; then
-            kind=minor
+            kind="minor"
           elif [ "$new_major" -eq "$prev_major" ] && [ "$new_minor" -eq "$prev_minor" ] && [ "$new_patch" -gt "$prev_patch" ]; then
-            kind=patch
+            kind="patch"
           else
             echo "::error::Tag $RELEASE_TAG does not strictly succeed $prev_full"
             exit 1
@@ -102,9 +109,6 @@ jobs:
           echo "::error::  git tag -a $RELEASE_TAG -m \"$marker: <reason>\" && git push origin $RELEASE_TAG"
           exit 1
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libfontconfig1-dev pkg-config libasound2-dev cmake libclang-dev
-
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -113,20 +117,61 @@ jobs:
       - name: Build release
         run: cargo build --release --locked
 
-      - name: Stage tarball
+      - name: Bundle Nokkvi.app
+        run: ./scripts/bundle-macos.sh --no-build
+
+      - name: Package DMG and ZIP
+        env:
+          TRIPLE: ${{ matrix.target }}
         run: |
-          STAGE="nokkvi-${RELEASE_TAG}-x86_64-unknown-linux-gnu"
-          mkdir -p "$STAGE"
-          cp target/release/nokkvi "$STAGE/"
-          cp -r assets themes "$STAGE/"
-          # The MilkDrop presets are embedded in the binary; skip the 4 MB copy.
-          rm -rf "$STAGE/assets/milkdrop"
-          cp install.sh "$STAGE/"
-          cp README.md CHANGELOG.md LICENSE THIRD-PARTY-LICENSES.md "$STAGE/"
-          tar czf "${STAGE}.tar.gz" "$STAGE"
-          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
-          echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
-          echo "CHECKSUM=${STAGE}.tar.gz.sha256" >> "$GITHUB_ENV"
+          set -euo pipefail
+          APP="target/release/bundle/Nokkvi.app"
+          STEM="nokkvi-${RELEASE_TAG}-${TRIPLE}"
+
+          DMG_STAGE="target/release/bundle/dmg-root"
+          rm -rf "$DMG_STAGE" "${STEM}.dmg" "${STEM}.zip"
+          mkdir -p "$DMG_STAGE"
+          ditto "$APP" "$DMG_STAGE/Nokkvi.app"
+          ln -s /Applications "$DMG_STAGE/Applications"
+          hdiutil create -volname Nokkvi -srcfolder "$DMG_STAGE" -ov -format UDZO "${STEM}.dmg"
+          rm -rf "$DMG_STAGE"
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "${STEM}.zip"
+
+          shasum -a 256 "${STEM}.dmg" > "${STEM}.dmg.sha256"
+          shasum -a 256 "${STEM}.zip" > "${STEM}.zip.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nokkvi-${{ env.RELEASE_TAG }}-${{ matrix.target }}
+          path: |
+            nokkvi-${{ env.RELEASE_TAG }}-${{ matrix.target }}.dmg
+            nokkvi-${{ env.RELEASE_TAG }}-${{ matrix.target }}.dmg.sha256
+            nokkvi-${{ env.RELEASE_TAG }}-${{ matrix.target }}.zip
+            nokkvi-${{ env.RELEASE_TAG }}-${{ matrix.target }}.zip.sha256
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve release tag
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "RELEASE_TAG=manual-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nokkvi-${{ env.RELEASE_TAG }}-*
+          merge-multiple: true
+          path: dist
 
       - name: Extract release notes from CHANGELOG
         run: |
@@ -141,17 +186,14 @@ jobs:
             found && /^## / { exit }
             found { print }
           ' CHANGELOG.md > release-notes.md
+          cat >> release-notes.md <<'EOF'
+
+          ---
+
+          > **macOS first launch:** `Nokkvi.app` is ad-hoc signed (not notarized). If Gatekeeper blocks the first launch, run `xattr -dr com.apple.quarantine /Applications/Nokkvi.app` or right-click the app in Finder and choose **Open**.
+          EOF
           echo "--- release-notes.md ---"
           cat release-notes.md
-
-      - name: Upload workflow artifact (dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nokkvi-${{ env.RELEASE_TAG }}
-          path: |
-            ${{ env.ASSET }}
-            ${{ env.CHECKSUM }}
 
       - name: Create draft release (tag push)
         if: github.event_name == 'push'
@@ -161,12 +203,4 @@ jobs:
           draft: true
           allowUpdates: true
           bodyFile: release-notes.md
-          artifacts: ${{ env.ASSET }},${{ env.CHECKSUM }}
-
-      - name: Trigger docs rebuild
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ secrets.DOCS_TRIGGER_TOKEN }}
-        run: |
-          gh api repos/f-o-o-g-s/nokkvi-docs/dispatches \
-            -f event_type=docs_update
+          artifacts: dist/nokkvi-${{ env.RELEASE_TAG }}-*
