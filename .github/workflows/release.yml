@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -14,15 +16,16 @@ env:
 
 jobs:
   # Refuse to package a known RustSec vulnerability in a crates.io dependency
-  # (cargo audit does not match git-pinned crates). /package step 6 checks the
-  # same audit before tagging; this backstops it.
+  # (cargo audit does not match git-pinned crates).
   audit:
+    if: github.event_name != 'release'
     uses: ./.github/workflows/audit.yml
     permissions:
       contents: read
 
   build:
     name: Build ${{ matrix.target }}
+    if: github.event_name != 'release'
     needs: audit
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -45,69 +48,75 @@ jobs:
             echo "RELEASE_TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
           fi
 
-      - name: Verify version bump policy
+      - name: Verify fork tag policy
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
 
-          new="${RELEASE_TAG#v}"
-          IFS='.' read -r new_major new_minor new_patch <<<"$new"
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-macos\.([0-9]+)$ ]]; then
+            echo "::error::Tag '$RELEASE_TAG' must match vX.Y.Z-macos.N (e.g. v0.31.0-macos.1)."
+            exit 1
+          fi
+          new_major="${BASH_REMATCH[1]}"
+          new_minor="${BASH_REMATCH[2]}"
+          new_patch="${BASH_REMATCH[3]}"
+          new_rev="${BASH_REMATCH[4]}"
+          upstream_ver="${new_major}.${new_minor}.${new_patch}"
 
-          if prev_full=$(git describe --tags --abbrev=0 --match 'v*.*.*' "${RELEASE_TAG}^" 2>/dev/null); then
-            prev="${prev_full#v}"
-            IFS='.' read -r prev_major prev_minor prev_patch <<<"$prev"
-            echo "Previous tag: $prev_full"
-          else
-            echo "No previous tag — first release, skipping bump check."
+          cargo_ver=$(awk '
+            /^\[package\]/ { in_pkg = 1; next }
+            /^\[/ { in_pkg = 0 }
+            in_pkg && /^version[[:space:]]*=[[:space:]]*"/ {
+              sub(/^[^"]*"/, "")
+              sub(/".*/, "")
+              print
+              exit
+            }
+          ' Cargo.toml)
+          if [ -z "$cargo_ver" ]; then
+            echo "::error::Could not read [package] version from Cargo.toml."
+            exit 1
+          fi
+          if [ "$upstream_ver" != "$cargo_ver" ]; then
+            echo "::error::Tag upstream version '$upstream_ver' does not match Cargo.toml [package] version '$cargo_ver'."
+            exit 1
+          fi
+
+          prev_tag=$(git tag -l 'v*-macos.*' --sort=-v:refname | awk -v cur="$RELEASE_TAG" '
+            !found && $0 != cur && $0 ~ /^v[0-9]+\.[0-9]+\.[0-9]+-macos\.[0-9]+$/ {
+              found = 1
+              print
+            }
+          ')
+          if [ -z "$prev_tag" ]; then
+            echo "No previous fork tag — first fork release, skipping ordering check."
             exit 0
           fi
 
-          echo "New tag:      $RELEASE_TAG"
+          echo "Previous fork tag: $prev_tag"
+          echo "New fork tag:      $RELEASE_TAG"
 
+          [[ "$prev_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-macos\.([0-9]+)$ ]]
+          prev_major="${BASH_REMATCH[1]}"
+          prev_minor="${BASH_REMATCH[2]}"
+          prev_patch="${BASH_REMATCH[3]}"
+          prev_rev="${BASH_REMATCH[4]}"
+
+          is_greater=0
           if [ "$new_major" -gt "$prev_major" ]; then
-            kind="major"
+            is_greater=1
           elif [ "$new_major" -eq "$prev_major" ] && [ "$new_minor" -gt "$prev_minor" ]; then
-            kind="minor"
+            is_greater=1
           elif [ "$new_major" -eq "$prev_major" ] && [ "$new_minor" -eq "$prev_minor" ] && [ "$new_patch" -gt "$prev_patch" ]; then
-            kind="patch"
-          else
-            echo "::error::Tag $RELEASE_TAG does not strictly succeed $prev_full"
+            is_greater=1
+          elif [ "$new_major" -eq "$prev_major" ] && [ "$new_minor" -eq "$prev_minor" ] && [ "$new_patch" -eq "$prev_patch" ] && [ "$new_rev" -gt "$prev_rev" ]; then
+            is_greater=1
+          fi
+
+          if [ "$is_greater" -ne 1 ]; then
+            echo "::error::Tag $RELEASE_TAG does not strictly succeed previous fork tag $prev_tag."
             exit 1
           fi
-
-          echo "Bump kind:    $kind"
-
-          if [ "$kind" = "patch" ]; then
-            exit 0
-          fi
-
-          # Minor/major bumps must close out the previous minor in CHANGELOG.md.
-          # If any v${prev_major}.${prev_minor}.* entries are still in the live
-          # CHANGELOG, they should have been moved to changelog-archive/ by the
-          # agent running /package step 1. Backstops the pre-commit hook for
-          # cases where it was bypassed or never installed.
-          archive_pattern="^## v${prev_major}\.${prev_minor}\."
-          if grep -qE "$archive_pattern" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md still contains v${prev_major}.${prev_minor}.* entries — close out the previous minor first."
-            echo "::error::Move those blocks into changelog-archive/CHANGELOG-${prev_major}.${prev_minor}.md and add a v${prev_major}.${prev_minor}.x line to the 'Older releases' footer (see .claude/skills/package/SKILL.md step 1)."
-            echo "::error::Recover with:"
-            echo "::error::  git push --delete origin $RELEASE_TAG && git tag -d $RELEASE_TAG"
-            echo "::error::  # archive, commit, push, re-tag (annotated for minor/major)"
-            exit 1
-          fi
-
-          marker="allow-${kind}-bump"
-          body=$(git tag -l --format='%(contents)' "$RELEASE_TAG" || true)
-          if printf '%s\n' "$body" | grep -Fq "$marker"; then
-            echo "Authorization marker found: $marker"
-            exit 0
-          fi
-
-          echo "::error::$kind bump from $prev_full to $RELEASE_TAG requires '$marker' in the annotated tag message body."
-          echo "::error::Recover with:"
-          echo "::error::  git push --delete origin $RELEASE_TAG && git tag -d $RELEASE_TAG"
-          echo "::error::  git tag -a $RELEASE_TAG -m \"$marker: <reason>\" && git push origin $RELEASE_TAG"
-          exit 1
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -153,6 +162,7 @@ jobs:
 
   publish:
     name: Publish release
+    if: github.event_name != 'release'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -175,6 +185,7 @@ jobs:
 
       - name: Extract release notes from CHANGELOG
         run: |
+          set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             HEADER="[Unreleased]"
           else
@@ -185,10 +196,31 @@ jobs:
             !found && (index($0, prefix " ") == 1 || $0 == prefix) { found = 1; next }
             found && /^## / { exit }
             found { print }
-          ' CHANGELOG.md > release-notes.md
+          ' CHANGELOG.md > changelog-section.md
+
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            if [ -z "$(tr -d '[:space:]' < changelog-section.md)" ]; then
+              echo "::error::CHANGELOG.md is missing a non-empty '## $HEADER' section."
+              exit 1
+            fi
+            upstream_ver="${RELEASE_TAG#v}"
+            upstream_ver="${upstream_ver%-macos.*}"
+            {
+              echo "Based on upstream [Nokkvi v${upstream_ver}](https://github.com/f-o-o-g-s/nokkvi/releases/tag/v${upstream_ver}): see its release notes for everything upstream changed."
+              echo ""
+              echo "## Fork's changes"
+              echo ""
+              cat changelog-section.md
+            } > release-notes.md
+          else
+            cp changelog-section.md release-notes.md
+          fi
+
           cat >> release-notes.md <<'EOF'
 
           ---
+
+          **Install with Homebrew:** `brew install --cask snusxd/nokkvi-macos/nokkvi-macos`
 
           > **macOS first launch:** `Nokkvi.app` is ad-hoc signed (not notarized). If Gatekeeper blocks the first launch, run `xattr -dr com.apple.quarantine /Applications/Nokkvi.app` or right-click the app in Finder and choose **Open**.
           EOF
@@ -200,7 +232,132 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ env.RELEASE_TAG }}
+          name: Nokkvi ${{ env.RELEASE_TAG }}
           draft: true
           allowUpdates: true
           bodyFile: release-notes.md
           artifacts: dist/nokkvi-${{ env.RELEASE_TAG }}-*
+
+  homebrew:
+    name: Update Homebrew cask
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate release and download checksums
+        id: prep
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "::notice::Skipping Homebrew tap update for prerelease $TAG."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-macos\.[0-9]+$ ]]; then
+            echo "::notice::Skipping Homebrew tap update for non-fork tag $TAG."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p checksums
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "nokkvi-${TAG}-aarch64-apple-darwin.zip.sha256" \
+            --pattern "nokkvi-${TAG}-x86_64-apple-darwin.zip.sha256" \
+            --dir checksums
+
+          arm_sha=$(awk '{print $1; exit}' "checksums/nokkvi-${TAG}-aarch64-apple-darwin.zip.sha256")
+          intel_sha=$(awk '{print $1; exit}' "checksums/nokkvi-${TAG}-x86_64-apple-darwin.zip.sha256")
+
+          if [[ ! "$arm_sha" =~ ^[0-9a-fA-F]{64}$ ]] || [[ ! "$intel_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::Failed to parse 64-hex sha256 checksums (arm='$arm_sha', intel='$intel_sha')."
+            exit 1
+          fi
+
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN secret is not set; snusxd/homebrew-nokkvi-macos was not updated (its own scheduled updater will catch up)."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "proceed=true"
+            echo "version=${TAG#v}"
+            echo "arm_sha=${arm_sha}"
+            echo "intel_sha=${intel_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Homebrew tap
+        if: steps.prep.outputs.proceed == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: snusxd/homebrew-nokkvi-macos
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update cask and push
+        if: steps.prep.outputs.proceed == 'true'
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.prep.outputs.version }}
+          ARM_SHA: ${{ steps.prep.outputs.arm_sha }}
+          INTEL_SHA: ${{ steps.prep.outputs.intel_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys
+          from pathlib import Path
+
+          path = Path("Casks/nokkvi-macos.rb")
+          text = path.read_text(encoding="utf-8")
+
+          version = os.environ["VERSION"]
+          arm_sha = os.environ["ARM_SHA"]
+          intel_sha = os.environ["INTEL_SHA"]
+
+          text, n_ver = re.subn(
+              r'(^\s*version\s+")[^"]+(")',
+              rf'\g<1>{version}\g<2>',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          text, n_arm = re.subn(
+              r'(\barm:\s*")[0-9a-fA-F]{64}(")',
+              rf'\g<1>{arm_sha}\g<2>',
+              text,
+              count=1,
+          )
+          text, n_intel = re.subn(
+              r'(\bintel:\s*")[0-9a-fA-F]{64}(")',
+              rf'\g<1>{intel_sha}\g<2>',
+              text,
+              count=1,
+          )
+
+          if n_ver != 1 or n_arm != 1 or n_intel != 1:
+              sys.exit(
+                  f"Expected 1 match each in {path}, got version={n_ver} arm={n_arm} intel={n_intel}"
+              )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          if git diff --quiet Casks/nokkvi-macos.rb; then
+            echo "Cask is already up to date for ${VERSION}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/nokkvi-macos.rb
+          git commit -m "nokkvi-macos ${VERSION}"
+          git push
