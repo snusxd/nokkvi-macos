@@ -62,7 +62,9 @@ Nokkvi is a fast, keyboard-driven music player, not a Navidrome admin panel. For
 ### Homebrew
 
 ```bash
-brew install --cask snusxd/nokkvi-macos/nokkvi-macos
+brew tap snusxd/nokkvi-macos
+brew trust snusxd/nokkvi-macos   # Homebrew 7+ loads third-party taps only once trusted
+brew install --cask nokkvi-macos
 ```
 
 To update later:

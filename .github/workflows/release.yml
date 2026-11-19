@@ -229,7 +229,7 @@ jobs:
 
           ---
 
-          **Install with Homebrew:** `brew install --cask snusxd/nokkvi-macos/nokkvi-macos`
+          **Install with Homebrew:** `brew tap snusxd/nokkvi-macos && brew trust snusxd/nokkvi-macos && brew install --cask nokkvi-macos`
 
           > **macOS first launch:** `Nokkvi.app` is ad-hoc signed (not notarized). If Gatekeeper blocks the first launch, run `xattr -dr com.apple.quarantine /Applications/Nokkvi.app` or right-click the app in Finder and choose **Open**.
           EOF
