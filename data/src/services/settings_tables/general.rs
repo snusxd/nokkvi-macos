@@ -882,13 +882,13 @@ mod tests {
     }
 
     /// Macro-emitted helper returns one entry per ui_meta-bearing setting.
-    /// 19 of the 20 declared keys carry ui_meta — light_mode does not (it
-    /// renders on the Theme tab, not General), so the helper emits 19 rows.
+    /// 20 of the 21 declared keys carry ui_meta — light_mode does not (it
+    /// renders on the Theme tab, not General), so the helper emits 20 rows.
     #[test]
     fn build_general_tab_settings_items_emits_one_row_per_ui_meta_entry() {
         let data = default_general_data();
         let entries = build_general_tab_settings_items(&data);
-        assert_eq!(entries.len(), 19);
+        assert_eq!(entries.len(), 20);
         // Every emitted entry is a Item, never a Header — section headers
         // live in the UI crate's hand-written builder.
         for e in &entries {
