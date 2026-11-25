@@ -12,6 +12,13 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+## v0.32.1-macos.1 — 2026-11-25
+
+### Changed
+
+- Brings the macOS build up to nokkvi 0.32.1: rounded list cards in Rounded Corners mode and the fixes listed under v0.32.0 and v0.32.1 below.
+- Discord: Settings → Playback → Discord Status now turns the Discord presence on and off, and nokkvi ships its own Discord app, so Discord App ID is only an optional override.
+
 ## v0.32.1 — 2026-11-23
 
 ### Changed
