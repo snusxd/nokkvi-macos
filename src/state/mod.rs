@@ -80,7 +80,7 @@ pub(crate) use audio::*;
 pub(crate) use autoplay::*;
 pub(crate) use centred_fetch::CENTRE_SETTLE;
 pub(crate) use cover_beat::*;
-pub(crate) use discord::DiscordState;
+pub(crate) use discord::{CoverAnswer, DiscordState};
 pub(crate) use dynamic_accent::*;
 pub(crate) use harbour::*;
 pub(crate) use idle::*;

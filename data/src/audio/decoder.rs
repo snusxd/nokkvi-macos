@@ -1247,12 +1247,6 @@ impl AudioDecoder {
         self.expected_file_size = size.filter(|&size| size > 0);
     }
 
-    /// The song's file size the caller stamped
-    /// ([`Self::set_expected_file_size`]).
-    pub fn expected_file_size(&self) -> Option<u64> {
-        self.expected_file_size
-    }
-
     /// Bound how long a requested transcode's open waits for its answer
     /// (see the field doc).
     pub fn set_answer_timeout(&mut self, timeout: Option<std::time::Duration>) {
@@ -1331,12 +1325,6 @@ impl AudioDecoder {
     /// The URL this decoder opened (the track's own, without `timeOffset`).
     pub fn url(&self) -> &str {
         &self.url
-    }
-
-    /// The server's length for the track that the caller stamped before
-    /// opening it ([`Self::set_expected_duration_ms`]).
-    pub fn expected_duration_ms(&self) -> Option<u64> {
-        self.expected_duration_ms
     }
 
     /// Where in the song the open stream starts, in whole seconds (see the
@@ -2490,7 +2478,7 @@ impl AudioDecoder {
             return AudioBuffer::invalid();
         }
 
-        AudioBuffer::from_data(output_data, self.format.clone(), 0)
+        AudioBuffer::from_data(output_data, self.format.clone())
     }
 
     /// Seek to position in track (milliseconds)

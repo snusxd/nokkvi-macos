@@ -5,7 +5,7 @@
 
 /// DRY macro for view message dispatch with scroll-seek timer injection.
 /// All non-Queue slot list views share the same pattern: check if the message
-/// is a `SlotListScrollSeek`, call the handler, then append scrollbar fade
+/// is a `SlotListPageMessage::ScrollSeek`, call the handler, then append scrollbar fade
 /// and seek-settled timers when it was a seek event.
 ///
 /// **Why this lives in `mod.rs` rather than getting per-view
@@ -169,8 +169,9 @@ impl Nokkvi {
             // -----------------------------------------------------------------
             Message::Navigation(nav) => self.handle_navigation(nav),
             Message::LibraryChanged(change) => self.handle_library_changed(change),
-            Message::DiscordCover { album_id, url } => {
-                self.discord.set_cover(album_id, url);
+            Message::DiscordCover { album_id, answer } => {
+                self.discord
+                    .set_cover(album_id, answer, discord::unix_now());
                 Task::none()
             }
             Message::StripClicked => {

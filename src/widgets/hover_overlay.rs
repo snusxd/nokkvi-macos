@@ -63,6 +63,9 @@ pub(crate) struct HoverOverlay<W> {
     /// darkens). Slot-list rows opt out: the push-in read as the row being
     /// picked up for a drag.
     press_scale: bool,
+    /// Draw the wash this far inside the widget's bounds. For a surface drawn
+    /// inset in a larger hit area (a slot row's card in its cell).
+    wash_inset: iced::Padding,
 }
 
 impl<W> HoverOverlay<W> {
@@ -75,12 +78,22 @@ impl<W> HoverOverlay<W> {
             on_accent_surface: false,
             wash_enabled: true,
             press_scale: true,
+            wash_inset: iced::Padding::ZERO,
         }
     }
 
     /// Keep the child at full size on press (`false`); the press wash stays.
     pub(crate) fn press_scale(mut self, yes: bool) -> Self {
         self.press_scale = yes;
+        self
+    }
+
+    /// Draw the hover/press wash inset from the widget's bounds by `inset`,
+    /// while hover and press still track the whole bounds. Slot rows in
+    /// rounded mode pass their card padding, so the wash covers the card and
+    /// not the gap around it.
+    pub(crate) fn wash_inset(mut self, inset: iced::Padding) -> Self {
+        self.wash_inset = inset;
         self
     }
 
@@ -283,7 +296,7 @@ where
 
             renderer.fill_quad(
                 renderer::Quad {
-                    bounds,
+                    bounds: bounds.shrink(self.wash_inset),
                     border: iced::Border {
                         radius: self.border_radius,
                         ..Default::default()

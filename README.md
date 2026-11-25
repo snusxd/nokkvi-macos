@@ -44,7 +44,7 @@ Full guides, config reference, keyboard shortcuts, theming, and visualizer detai
 ### Fork additions
 
 - **Cover Beat visualizer:** the now-playing artwork swells on each kick drum and settles back (grows past its edges in Theater Mode, zooms inside its frame in Queue and Radios; Subtle or Punchy strength in Settings > Interface > Artwork Column).
-- **Discord Rich Presence:** optional Discord App ID under Settings > Playback > Discord displays your current track on your Discord profile, with album art when Navidrome is reachable from the internet.
+- **Discord Rich Presence:** Settings > Playback > Discord > Discord Status displays your current track on your Discord profile (with an optional Discord App ID override, and album art when Navidrome is reachable from the internet).
 - **macOS-native shortcuts:** bindable `Cmd` modifier with `⌃⌥⇧⌘` labels, `Cmd` defaults in place of `Ctrl`, `Cmd+click` multi-selection, and protection against binding system shortcuts like `⌘Q`, `⌘C`, or `⌘Tab`.
 - **Layout-independent hotkeys:** letter, punctuation, and number-row bindings work on non-Latin (e.g. Russian) and AZERTY keyboard layouts.
 - **Lower CPU usage:** idle visualizers and unfocused Harbour scenes pause automatically, Harbour caps at 60 fps on high-refresh displays, paused long titles rest until hovered, and playback avoids full-window redraws.
