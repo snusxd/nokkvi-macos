@@ -151,7 +151,10 @@ jobs:
           mkdir -p "$DMG_STAGE"
           ditto "$APP" "$DMG_STAGE/Nokkvi.app"
           ln -s /Applications "$DMG_STAGE/Applications"
-          hdiutil create -volname Nokkvi -srcfolder "$DMG_STAGE" -ov -format UDZO "${STEM}.dmg"
+          # hdiutil's auto-sized HFS+ image can underestimate space on macOS runners
+          # and fail with "No space left on device" even with >100 GiB free on host.
+          DMG_MB=$(( $(du -sm "$DMG_STAGE" | awk '{print $1}') + 64 ))
+          hdiutil create -volname Nokkvi -srcfolder "$DMG_STAGE" -size "${DMG_MB}m" -ov -format UDZO "${STEM}.dmg"
           rm -rf "$DMG_STAGE"
 
           ditto -c -k --sequesterRsrc --keepParent "$APP" "${STEM}.zip"
