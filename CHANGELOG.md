@@ -22,6 +22,16 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+## v0.32.1-macos.2 — 2026-11-27
+
+### Changed
+
+- Syncs with upstream `main`: the lyrics frame clock now runs only when the sheet is actually on screen (Queue or Theater Mode), cutting idle/playback CPU usage across other views.
+
+### Fixed
+
+- Release workflow: size the macOS DMG image explicitly so the Intel runner no longer hits `No space left on device` during `hdiutil create`.
+
 ## v0.32.1-macos.1 — 2026-11-25
 
 ### Changed
